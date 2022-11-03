@@ -1,0 +1,7 @@
+defaults:
+  - fac: fac
+  - env: point_goal
+  - train: train
+  - optimize: optimize
+
+verbose: true

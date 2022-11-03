@@ -1,3 +1,4 @@
+"""Replay buffer for DroQ implementation."""
 from typing import Optional, Union
 
 import gym
@@ -9,6 +10,14 @@ from n_dim_reach_env.rl.data.dataset import Dataset, DatasetDict
 
 def _init_replay_dict(obs_space: gym.Space,
                       capacity: int) -> Union[np.ndarray, DatasetDict]:
+    """Initialize the replay buffer dictionary.
+
+    Args:
+        obs_space (gym.Space): Observation space.
+        capacity (int): Capacity of the replay buffer.
+    Returns:
+        Union[np.ndarray, DatasetDict]: Replay buffer dictionary.
+    """
     if isinstance(obs_space, gym.spaces.Box):
         return np.empty((capacity, *obs_space.shape), dtype=obs_space.dtype)
     elif isinstance(obs_space, gym.spaces.Dict):
@@ -22,6 +31,13 @@ def _init_replay_dict(obs_space: gym.Space,
 
 def _insert_recursively(dataset_dict: DatasetDict, data_dict: DatasetDict,
                         insert_index: int):
+    """Insert data into the replay buffer dictionary.
+
+    Args:
+        dataset_dict (DatasetDict): Replay buffer dictionary to insert in.
+        data_dict (DatasetDict): Data that is inserted.
+        insert_index (int): Index to insert at.
+    """
     if isinstance(dataset_dict, np.ndarray):
         dataset_dict[insert_index] = data_dict
     elif isinstance(dataset_dict, dict):
@@ -33,25 +49,30 @@ def _insert_recursively(dataset_dict: DatasetDict, data_dict: DatasetDict,
 
 
 class ReplayBuffer(Dataset):
-    """The replay buffer for off-policy RL.
-    Args:
+    """The replay buffer for off-policy RL."""
+
+    def __init__(self,
+                 observation_space: gym.Space,
+                 action_space: gym.Space,
+                 capacity: int,
+                 use_cost: bool = False,
+                 next_observation_space: Optional[gym.Space] = None,
+                 achieved_goal_space: Optional[gym.Space] = None,
+                 desired_goal_space: Optional[gym.Space] = None):
+        """Initialize the replay buffer.
+
+        Args:
         observation_space (gym.Space): The observation space of the environment
         action_space (gym.Space): The action space of the environment
         capacity (int): Number of transitions in the buffer
+        use_cost (bool, optional): Whether to use cost. Defaults to False.
         next_observation_space (gym.Space, Optional): The next observation space of the environment.
             If omitted, will be the same as observation_space.
         achieved_goal_space (gym.Space, Optional): The achieved goal space of the environment.
             Only to be used for HER / GoalEnv.
         desired_goal_space (gym.Space, Optional): The desired goal space of the environment.
             Only to be used for HER / GoalEnv.
-    """
-    def __init__(self,
-                 observation_space: gym.Space,
-                 action_space: gym.Space,
-                 capacity: int,
-                 next_observation_space: Optional[gym.Space] = None,
-                 achieved_goal_space: Optional[gym.Space] = None,
-                 desired_goal_space: Optional[gym.Space] = None):
+        """
         if next_observation_space is None:
             next_observation_space = observation_space
 
@@ -67,17 +88,27 @@ class ReplayBuffer(Dataset):
             masks=np.empty((capacity, ), dtype=np.float32),
             dones=np.empty((capacity, ), dtype=bool),
         )
+        if use_cost:
+            dataset_dict["costs"] = np.empty((capacity, ), dtype=np.float32)
         if desired_goal_space is None and achieved_goal_space is not None:
             desired_goal_space = achieved_goal_space
         if achieved_goal_space is not None:
-            dataset_dict['achieved_goals'] = np.empty((capacity, *achieved_goal_space.shape),
-                                                       dtype=achieved_goal_space.dtype)
-            dataset_dict['desired_goals'] = np.empty((capacity, *desired_goal_space.shape),
-                                                      dtype=desired_goal_space.dtype)
-            dataset_dict['next_achieved_goals'] = np.empty((capacity, *achieved_goal_space.shape),
-                                                            dtype=achieved_goal_space.dtype)
-            dataset_dict['next_desired_goals'] = np.empty((capacity, *desired_goal_space.shape),
-                                                           dtype=desired_goal_space.dtype)
+            dataset_dict['achieved_goals'] = np.empty(
+                (capacity, *achieved_goal_space.shape),
+                dtype=achieved_goal_space.dtype
+            )
+            dataset_dict['desired_goals'] = np.empty(
+                (capacity, *desired_goal_space.shape),
+                dtype=desired_goal_space.dtype
+            )
+            dataset_dict['next_achieved_goals'] = np.empty(
+                (capacity, *achieved_goal_space.shape),
+                dtype=achieved_goal_space.dtype
+            )
+            dataset_dict['next_desired_goals'] = np.empty(
+                (capacity, *desired_goal_space.shape),
+                dtype=desired_goal_space.dtype
+            )
 
         super().__init__(dataset_dict)
 
@@ -86,9 +117,11 @@ class ReplayBuffer(Dataset):
         self._insert_index = 0
 
     def __len__(self) -> int:
+        """Return the current size of the replay buffer."""
         return self._size
 
     def insert(self, data_dict: DatasetDict):
+        """Insert a transition into the replay buffer."""
         _insert_recursively(self.dataset_dict, data_dict, self._insert_index)
 
         self._insert_index = (self._insert_index + 1) % self._capacity

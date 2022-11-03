@@ -1,0 +1,5 @@
+id: Safexp-PointGoal1-v0
+render_mode: null
+seed: 42
+max_ep_len: 1000
+delta: 0.1

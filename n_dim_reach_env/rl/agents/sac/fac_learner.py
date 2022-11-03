@@ -60,13 +60,14 @@ class FACLearner(Agent):
     num_min_qs: Optional[int] = struct.field(
         pytree_node=False)  # See M in RedQ https://arxiv.org/abs/2101.05982
     sampled_backup: bool = struct.field(pytree_node=False)
-    delta: float
+    delta: float = 0.1
 
     @classmethod
     def create(cls,
                seed: int,
                observation_space: gym.Space,
                action_space: gym.Space,
+               delta: float = 0.1,
                actor_lr: float = 3e-4,
                critic_lr: float = 3e-4,
                cost_critic_lr: float = 3e-4,
@@ -82,9 +83,34 @@ class FACLearner(Agent):
                critic_layer_norm: bool = False,
                target_entropy: Optional[float] = None,
                init_temperature: float = 1.0,
-               sampled_backup: bool = True,
-               delta: float = 0.1):
-        """Create the FAC agent and its optimizers."""
+               sampled_backup: bool = True):
+        r"""Create the FAC agent and its optimizers.
+
+        Args:
+            seed (int): The random seed.
+            observation_space (gym.Space): The observation space.
+            action_space (gym.Space): The action space.
+            delta (float, optional): The cost ratio threshold for constraint violation. Qc(s,a) \leq \delta.
+                Defaults to 0.1.
+            actor_lr (float, optional): The learning rate for the actor. Defaults to 3e-4.
+            critic_lr (float, optional): The learning rate for the critic. Defaults to 3e-4.
+            cost_critic_lr (float, optional): The learning rate for the cost critic. Defaults to 3e-4.
+            lambda_lr (float, optional): The learning rate for the lambda multiplier. Defaults to 3e-4.
+            temp_lr (float, optional): The learning rate for the temperature. Defaults to 3e-4.
+            hidden_dims (Sequence[int], optional): The hidden dimensions of the actor and critic networks.
+                Defaults to (256, 256).
+            cost_discount (float, optional): The discount factor for the constraint critic. Defaults to 0.99.
+            discount (float, optional): The discount factor. Defaults to 0.99.
+            tau (float, optional): The soft target update coefficient. Defaults to 0.005.
+            num_qs (int, optional): The number of Q networks in the critic and cost critic ensembles. Defaults to 2.
+            num_min_qs (Optional[int], optional): See M in RedQ https://arxiv.org/abs/2101.05982. Defaults to None.
+            critic_dropout_rate (Optional[float], optional): The dropout rate for the critic networks. Defaults to None.
+            critic_layer_norm (bool, optional): Whether to use layer normalization in the critic networks.
+                Defaults to False.
+            target_entropy (Optional[float], optional): The target entropy. Defaults to None.
+            init_temperature (float, optional): The initial temperature. Defaults to 1.0.
+            sampled_backup (bool, optional): Whether to use sampled backups. Defaults to True.
+        """
         action_dim = action_space.shape[-1]
         observations = observation_space.sample()
         actions = action_space.sample()
@@ -153,7 +179,7 @@ class FACLearner(Agent):
                                   activate_final=True,
                                   dropout_rate=critic_dropout_rate,
                                   use_layer_norm=critic_layer_norm)
-        lambda_def = partial(LambdaMultiplier, base_cls=lambda_base_cls)
+        lambda_def = LambdaMultiplier(base_cls=lambda_base_cls)
         lambda_params = lambda_def.init(lambda_key, observations)['params']
         lam = TrainState.create(apply_fn=lambda_def.apply,
                                 params=lambda_params,
@@ -199,6 +225,7 @@ class FACLearner(Agent):
             q = qs.min(axis=0)
             qcs = agent.cost_critic.apply_fn({'params': agent.cost_critic.params},
                                              batch['observations'],
+                                             actions,
                                              True,
                                              rngs={'dropout': cost_critic_key})
             qc = qcs.min(axis=0)
