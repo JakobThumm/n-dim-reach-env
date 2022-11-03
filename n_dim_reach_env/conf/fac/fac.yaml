@@ -15,7 +15,7 @@ target_entropy: -2
 init_temperature: 0.1
 sampled_backup: true
 buffer_size: 1000000
-use_her: false
+use_her: true
 n_her_samples: 4
 goal_selection_strategy: future
 handle_timeout_termination: true

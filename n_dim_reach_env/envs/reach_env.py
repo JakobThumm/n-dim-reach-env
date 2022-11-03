@@ -8,7 +8,7 @@ from gym import spaces
 import numpy as np
 import pygame
 from typing import Dict, List, Optional, Tuple, Union
-from n_dim_reach_env.utils.tictoc import tic, toc
+# from n_dim_reach_env.utils.tictoc import tic, toc
 
 
 class ReachEnv(gym.GoalEnv):

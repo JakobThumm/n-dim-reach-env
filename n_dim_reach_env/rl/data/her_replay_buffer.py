@@ -69,25 +69,8 @@ class HEReplayBuffer(ReplayBuffer):
 
     Samples k new transitions for every given transition with virtual goals.
     Enables sparse reward learning.
-
-    Args:
-        observation_space: gym.Space
-        action_space: gym.Space
-        capacity: number of real transitions (not virtual ones)
-        achieved_goal_space: gym.Space of the achieved goal
-        desired_goal_space (Optional, gym.Space): If omitted, achieved_goal_space will be used.
-        next_observation_space: Optional (gym.space)
-        max_episode_length: The maximum length of an episode. If not specified,
-                            it will be automatically inferred if the environment uses a ``gym.wrappers.TimeLimit``
-                            wrapper.
-        goal_selection_strategy: Strategy for sampling goals for replay.
-                                 One of ['episode', 'final', 'future']
-        n_sampled_goal: Number of virtual transitions to create per real transition,
-                        by sampling new goals.
-        handle_timeout_termination: Handle timeout termination (due to timelimit) separately and treat the task as
-                                    infinite horizon task.
-                                    https://github.com/DLR-RM/stable-baselines3/issues/284
     """
+
     def __init__(self,
                  env: gym.GoalEnv,
                  observation_space: gym.Space,
@@ -99,13 +82,36 @@ class HEReplayBuffer(ReplayBuffer):
                  max_episode_length: Optional[int] = None,
                  n_sampled_goal: int = 4,
                  goal_selection_strategy: Union[GoalSelectionStrategy, str] = "future",
-                 handle_timeout_termination: bool = True):
+                 handle_timeout_termination: bool = True,
+                 use_cost: bool = False):
+        """Initialize the replay buffer.
+
+        Args:
+        observation_space (gym.Space): The observation space of the environment.
+        action_space (gym.Space): The action space of the environment.
+        capacity (int): number of real transitions (not virtual ones)
+        achieved_goal_space (gym.Space): gym.Space of the achieved goal
+        desired_goal_space (Optional, gym.Space): If omitted, achieved_goal_space will be used.
+        next_observation_space (Optional, gym.Space): If omitted, observation_space will be used.
+        max_episode_length (int): The maximum length of an episode. If not specified,
+                            it will be automatically inferred if the environment uses a ``gym.wrappers.TimeLimit``
+                            wrapper.
+        goal_selection_strategy (GoalSelectionStrategy, str): Strategy for sampling goals for replay.
+                                 One of ['episode', 'final', 'future']
+        n_sampled_goal (int): Number of virtual transitions to create per real transition,
+                        by sampling new goals.
+        handle_timeout_termination (bool): Handle timeout termination (due to timelimit) separately and treat the task
+                                           as infinite horizon task.
+                                           https://github.com/DLR-RM/stable-baselines3/issues/284
+        use_cost (bool): Whether to use cost in the replay buffer.
+        """
         if desired_goal_space is None and achieved_goal_space is not None:
             desired_goal_space = achieved_goal_space
         super().__init__(observation_space=observation_space,
                          action_space=action_space,
                          capacity=capacity,
-                         next_observation_space=next_observation_space)
+                         next_observation_space=next_observation_space,
+                         use_cost=use_cost)
         # convert goal_selection_strategy into GoalSelectionStrategy if string
         if isinstance(goal_selection_strategy, str):
             self.goal_selection_strategy = KEY_TO_GOAL_STRATEGY[goal_selection_strategy.lower()]
@@ -136,6 +142,7 @@ class HEReplayBuffer(ReplayBuffer):
         # info has its own buffer because it cannot be initialized properly.
         # Store info dicts as it can be used to compute the reward (e.g. continuity cost)
         self.info_buffer = [deque(maxlen=self.max_episode_length) for _ in range(self.max_episode_stored)]
+        self.use_cost = use_cost
 
     def insert(
             self,
@@ -144,7 +151,13 @@ class HEReplayBuffer(ReplayBuffer):
             env: gym.GoalEnv
     ):
         """Insert a transition to the replay buffer.
+
         Increments the epsiode counter by 1 if done flag is set.
+
+        Args:
+            data_dict (DatasetDict): Transition to insert.
+            infos (Dict[str, Any]): Info dictionary for the given transition.
+            env (gym.GoalEnv): Environment from which the transition was sampled.
         """
         # Remove termination signals due to timeout
         done = data_dict["dones"]
@@ -198,6 +211,7 @@ class HEReplayBuffer(ReplayBuffer):
                             k: Optional[int] = 4,
                             strategy: Optional[GoalSelectionStrategy] = GoalSelectionStrategy.FUTURE):
         """Create HER samples for the given episode ID.
+
         Should only be called after the episode is finished.
 
         Args:
@@ -278,6 +292,7 @@ class HEReplayBuffer(ReplayBuffer):
                env: gym.GoalEnv,
                keys: Optional[Iterable[str]] = None,
                indx: Optional[np.ndarray] = None) -> frozen_dict.FrozenDict:
+        """Sample a batch of transitions."""
         return self._sample_transitions(batch_size, env=env)  # pytype: disable=bad-return-type
 
     def _sample_transitions(
@@ -358,9 +373,11 @@ class HEReplayBuffer(ReplayBuffer):
         her_indices: np.ndarray,
         transitions_indices: np.ndarray,
     ) -> np.ndarray:
-        """
-        Sample goals based on goal_selection_strategy.
+        """Sample goals based on goal_selection_strategy.
+
         This is a vectorized (fast) version.
+        In the cost case, we assume that the goal of the episode is not in the constraint area.
+        We only sample goals from transitions that did not lead to a constraint violation.
 
         Args:
             episode_indices: Episode indices to use.
@@ -400,14 +417,24 @@ class HEReplayBuffer(ReplayBuffer):
         else:
             raise ValueError(f"Strategy {self.goal_selection_strategy} for sampling goals not supported!")
         her_buffer_indices = self.get_buffer_indices(episode_indices[her_indices], her_transitions_indices)
-
-        return self.sample_non_frozen(
+        goals = self.sample_non_frozen(
             her_buffer_indices.shape[0],
             ["observations"],
-            her_buffer_indices)["observations"]["achieved_goal"]
+            her_buffer_indices
+        )["observations"]["achieved_goal"]
+        # Replace goals from transitions that led to a constraint violation with the goal of the episode.
+        if self.use_cost:
+            invalid_goals = self.dataset_dict['costs'][her_buffer_indices] > 0
+            goals[invalid_goals] = self.sample_non_frozen(
+                her_buffer_indices[invalid_goals].shape[0],
+                ["observations"],
+                her_buffer_indices[invalid_goals]
+            )["observations"]["desired_goal"]
+        return goals
 
     @property
     def n_episodes_stored(self) -> int:
+        """Return the number of episodes stored in the buffer."""
         if self.full:
             return self.max_episode_stored
         return self.pos
@@ -417,6 +444,7 @@ class HEReplayBuffer(ReplayBuffer):
         obs: Union[np.ndarray, Dict[str, np.ndarray]],
         env: Optional[gym.GoalEnv] = None,
     ) -> Union[np.ndarray, Dict[str, np.ndarray]]:
+        """Normalize observations."""
         if env is not None:
             return env.normalize_obs(obs)
         return obs
@@ -426,6 +454,7 @@ class HEReplayBuffer(ReplayBuffer):
         reward: np.ndarray,
         env: Optional[gym.GoalEnv] = None
     ) -> np.ndarray:
+        """Normalize rewards."""
         if env is not None:
             return env.normalize_reward(reward).astype(np.float32)
         return reward
