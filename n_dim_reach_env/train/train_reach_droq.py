@@ -11,13 +11,11 @@ Changelog:
 """
 from copy import copy
 import gym  # noqa: F401
-import numpy as np
 
 import hydra
 from hydra.core.config_store import ConfigStore
 
 from gym.wrappers import TimeLimit
-from gym import spaces
 
 from n_dim_reach_env.envs.reach_env import ReachEnv  # noqa: F401
 from n_dim_reach_env.rl.optimization.optimize_hyperparameters import optimize_hyperparameters  # noqa: F401
@@ -58,47 +56,6 @@ def create_env(env_args: EnvConfig) -> gym.Env:
                                      n_resamples=env_args.n_resamples,
                                      punishment=env_args.punishment)
     return env
-
-
-def get_observation_space(env: gym.Env) -> spaces.Box:
-    """Get the observation space.
-
-    Args:
-        env (gym.Env): Environment.
-
-    Returns:
-        spaces.Box: Observation space.
-    """
-    # If the observation space is of type dict,
-    # change the observation space. DroQ cannot handle dicts right now.
-    if isinstance(env.observation_space, spaces.Dict):
-        observation_space = copy(env.observation_space)
-        lows = None
-        highs = None
-        for key in env.observation_space.spaces:
-            if key != "achieved_goal":
-                if lows is None:
-                    lows = np.array(env.observation_space.spaces[key].low)
-                    highs = np.array(env.observation_space.spaces[key].high)
-                else:
-                    lows = np.append(lows, env.observation_space.spaces[key].low)
-                    highs = np.append(highs, env.observation_space.spaces[key].high)
-        observation_space = spaces.Box(low=lows, high=highs)
-    else:
-        observation_space = env.observation_space
-    return observation_space
-
-
-def has_dict_obs(env: gym.Env) -> bool:
-    """Check if the environment has a dict observation space.
-
-    Args:
-        env (gym.Env): Environment.
-
-    Returns:
-        bool: True if the observation space is a dict.
-    """
-    return isinstance(env.observation_space, spaces.Dict)
 
 
 @hydra.main(config_path="../conf", config_name="conf_droq")
@@ -142,6 +99,7 @@ def main(cfg: DroQTrainingConfig):
         "eval_episodes": cfg.train.eval_episodes,
         "load_checkpoint": cfg.train.load_checkpoint,
         "load_from_folder": cfg.train.load_from_folder,
+        "logging_keys": cfg.train.logging_keys,
         "use_tqdm": cfg.train.tqdm,
         "use_wandb": cfg.train.use_wandb,
         "wandb_project": cfg.train.wandb_project,
@@ -153,13 +111,9 @@ def main(cfg: DroQTrainingConfig):
     if not cfg.optimize.optimize:
         env = create_env(cfg.env)
         eval_env = create_env(cfg.env)
-        observation_space = get_observation_space(env)
-        dict_obs = has_dict_obs(env)
         train_droq(
             env=env,
             eval_env=eval_env,
-            observation_space=observation_space,
-            dict_obs=dict_obs,
             **learn_args
         )
     else:
@@ -170,8 +124,6 @@ def main(cfg: DroQTrainingConfig):
         # del env_args.max_ep_len
         optimize_hyperparameters(
             env_fn=create_env,
-            obs_space_fn=get_observation_space,
-            has_dict_obs_fn=has_dict_obs,
             env_args=env_args,
             learn_args=learn_args,
             tuning_params=cfg.optimize.tuning_params,

@@ -15,7 +15,7 @@ buffer_size: 1000000
 use_her: true
 n_her_samples: 4
 goal_selection_strategy: future
-handle_timeout_termination: true
+handle_timeout_termination: false
 boost_single_demo: true
 pre_play_steps: 30000
 pre_play_rate: 0.5

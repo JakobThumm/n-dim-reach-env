@@ -1,4 +1,4 @@
-id: Safexp-PointGoal0-v0
+id: Safexp-PointGoalSparse1-v0
 render_mode: null
 seed: 42
 max_ep_len: 1000

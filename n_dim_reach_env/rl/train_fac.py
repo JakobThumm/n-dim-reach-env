@@ -20,8 +20,10 @@ from flax.training import checkpoints
 
 from gym import spaces
 
-from n_dim_reach_env.rl.util.dict_conversion import single_obs
+from n_dim_reach_env.rl.util.dict_conversion import\
+    single_obs, goal_dist, goal_lidar, get_observation_space, has_dict_obs
 from n_dim_reach_env.rl.util.action_scaling import scale_action, unscale_action
+from n_dim_reach_env.rl.util.logging import Logger
 
 from n_dim_reach_env.rl.agents import FACLearner
 from n_dim_reach_env.rl.data import ReplayBuffer
@@ -29,33 +31,9 @@ from n_dim_reach_env.rl.data.her_replay_buffer import HEReplayBuffer
 from n_dim_reach_env.rl.evaluation import evaluate  # noqa: F401
 
 
-def reset_logging_info(
-    logging_keys: Optional[list] = None
-) -> Dict[str, float]:
-    """Create an empty logging info dictionary.
-
-    Args:
-        logging_keys (Optional[list], optional): Logging keys. Defaults to None.
-    Returns:
-        Dict[str, float]: Logging info dictionary.
-    """
-    logging_info = {
-        "reward": 0,
-        "max_reward": 0,
-        "cost_sum": 0,
-        "cost_rate": 0,
-        "length": 0
-    }
-    for key in logging_keys:
-        logging_info[key] = 0
-    return logging_info
-
-
 def train_fac(
     env: gym.Env,
     eval_env: gym.Env,
-    observation_space: spaces.Space,
-    dict_obs: bool,
     delta: float = 0.1,
     seed: int = 0,
     agent_kwargs: dict = {},
@@ -75,7 +53,7 @@ def train_fac(
     eval_callback: Optional[callable] = None,
     load_checkpoint: int = -1,
     load_from_folder: str = None,
-    logging_keys: Optional[list] = None,
+    logging_keys: Optional[Dict] = {"reward": "cum"},
     use_tqdm: bool = True,
     use_wandb: bool = False,
     wandb_project: str = "n-dim-reach",
@@ -89,8 +67,6 @@ def train_fac(
     Args:
         env (gym.Env): The environment to train on.
         eval_env (gym.Env): The environment to evaluate on.
-        observation_space (spaces.Space): The observation space of the environment.
-        dict_obs (bool): Whether the environment uses dict observations.
         delta (float, optional): The cost ratio threshold for constraint violation. Qc(s,a) \leq \delta. Defaults to 0.1
         seed (int, optional): The seed to use for the environment and the agent. Defaults to 0.
         agent_kwargs (dict, optional): Additional keyword arguments to pass to the agent. Defaults to {}.
@@ -112,7 +88,11 @@ def train_fac(
             Set to -1 to load the latest checkpoint.
         load_from_folder (str, optional): The folder to load the checkpoint from. Defaults to None.
             Set to None to not load from folder.
-        logging_keys (Optional[list], optional): The keys to log. Defaults to None.
+        logging_keys (Optional[Dict], optional): Keys to log. Defaults to {"reward": "cum"}.
+                For every key, you can specify the type of logging. The following types are supported:
+                - "cum": Cumulative logging.
+                - "avg": Average logging.
+                - "max": Maximum logging.
         use_tqdm (bool, optional): Whether to use tqdm for progress bars. Defaults to True.
         use_wandb (bool, optional): Whether to use wandb for logging. Defaults to False.
         wandb_project (str, optional): The wandb project to use. Defaults to "n-dim-reach".
@@ -123,6 +103,17 @@ def train_fac(
     """
     os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".80"
     print(jax.devices())
+
+    if hasattr(env, 'observe_goal_lidar') and env.observe_goal_lidar:
+        dict_to_obs_fn = goal_lidar
+        observation_space = get_observation_space(env, "lidar")
+    elif hasattr(env, 'observe_goal_dist') and env.observe_goal_dist:
+        dict_to_obs_fn = goal_dist
+        observation_space = get_observation_space(env, "dist")
+    else:
+        dict_to_obs_fn = single_obs
+        observation_space = get_observation_space(env)
+    dict_obs = has_dict_obs(env)
 
     if load_from_folder is None:
         if use_wandb:
@@ -158,6 +149,7 @@ def train_fac(
                 action_space=env.action_space,
                 capacity=buffer_size,
                 use_cost=True,
+                dict_to_obs_fn=dict_to_obs_fn,
                 achieved_goal_space=env.observation_space["achieved_goal"],
                 desired_goal_space=env.observation_space["desired_goal"],
                 next_observation_space=env.observation_space,
@@ -216,9 +208,7 @@ def train_fac(
         deque_size=eval_episodes
     )
     observation, done = env.reset(), False
-    if not logging_keys:
-        logging_keys = {}
-    logging_info = reset_logging_info(logging_keys)
+    logger = Logger(logging_keys=logging_keys)
     eval_at_next_done = False
     for i in tqdm.tqdm(range(start_i, int(max_steps)),
                        smoothing=0.1,
@@ -229,7 +219,7 @@ def train_fac(
         # Normal agent actions
         else:
             if dict_obs:
-                action_observation = single_obs(observation)
+                action_observation = dict_to_obs_fn(observation)
             else:
                 action_observation = observation
             action, agent = agent.sample_actions(action_observation)
@@ -241,14 +231,7 @@ def train_fac(
         next_observation, reward, done, info = env.step(action)
         assert "cost" in info, "Cost not in info dict"
         # Logging
-        logging_info["reward"] += reward
-        logging_info["max_reward"] = max(logging_info["max_reward"], reward)
-        logging_info["cost_sum"] += info["cost"]
-        logging_info["length"] += 1
-        logging_info["cost_rate"] = logging_info["cost_sum"]/logging_info["length"]
-        for key in logging_keys:
-            if key in info:
-                logging_info[key] = info[key]
+        logger.log(info=info, reward=reward)
 
         if not done:
             mask = 1.0
@@ -281,12 +264,12 @@ def train_fac(
         else:
             if dict_obs:
                 replay_buffer.insert(
-                    dict(observations=single_obs(observation),
+                    dict(observations=dict_to_obs_fn(observation),
                          actions=insert_action,
                          rewards=reward,
                          masks=mask,
                          dones=done,
-                         next_observations=single_obs(next_observation),
+                         next_observations=dict_to_obs_fn(next_observation),
                          costs=info["cost"]))
             else:
                 replay_buffer.insert(
@@ -315,21 +298,18 @@ def train_fac(
                 for k, v in update_info.items():
                     wandb.log({f'training/{k}': v}, step=i)
         if done:
+            logging_info = logger.get_logging_info()
             if use_wandb:
                 for k, v in logging_info.items():
-                    wandb.log({f'training/{k}': v}, step=i)
-                wandb.log({
-                    'training/avg_reward':
-                        logging_info["reward"]/logging_info["length"]
-                }, step=i)
+                    wandb.log({f'training/{k}': v})
             print(logging_info)
-            logging_info = reset_logging_info(logging_keys)
+            logger.reset()
             if eval_at_next_done:
                 for _ in range(eval_episodes):
                     observation, done = eval_env.reset(), False
                     while not done:
                         if dict_obs:
-                            action_observation = single_obs(observation)
+                            action_observation = dict_to_obs_fn(observation)
                         else:
                             action_observation = observation
                         action = agent.eval_actions(action_observation)

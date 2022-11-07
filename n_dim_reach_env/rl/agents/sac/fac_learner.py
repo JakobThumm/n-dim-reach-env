@@ -177,8 +177,8 @@ class FACLearner(Agent):
         lambda_base_cls = partial(MLP,
                                   hidden_dims=hidden_dims,
                                   activate_final=True,
-                                  dropout_rate=critic_dropout_rate,
-                                  use_layer_norm=critic_layer_norm)
+                                  dropout_rate=0.0,
+                                  use_layer_norm=False)
         lambda_def = LambdaMultiplier(base_cls=lambda_base_cls)
         lambda_params = lambda_def.init(lambda_key, observations)['params']
         lam = TrainState.create(apply_fn=lambda_def.apply,
@@ -236,7 +236,8 @@ class FACLearner(Agent):
             actor_loss = (alpha * log_probs - q + lambda_val * (qc - agent.delta)).mean()
             return actor_loss, {
                 'actor_loss': actor_loss,
-                'entropy': -log_probs.mean()
+                'entropy': -log_probs.mean(),
+                'alpha': alpha.mean(),
             }
 
         grads, actor_info = jax.grad(actor_loss_fn,
@@ -318,8 +319,8 @@ class FACLearner(Agent):
 
         if agent.sampled_backup:
             next_log_probs = dist.log_prob(next_actions)
-            target_q -= agent.discount * batch['masks'] * agent.temp.apply_fn(
-                {'params': agent.temp.params}) * next_log_probs
+            alpha = agent.temp.apply_fn({'params': agent.temp.params})
+            target_q -= agent.discount * batch['masks'] * alpha * next_log_probs
 
         key3, rng = jax.random.split(rng)
 
@@ -454,10 +455,13 @@ class FACLearner(Agent):
         def lambda_loss_fn(
                 lambda_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
             lambda_val = agent.lam.apply_fn({'params': lambda_params},
-                                            batch['observations'])
+                                            batch['observations'],
+                                            True,
+                                            rngs={'dropout': lambda_key})
             lambda_loss = (-lambda_val * (qc - agent.delta)).mean()
             return lambda_loss, {
-                'lambda_loss': lambda_loss
+                'lambda_loss': lambda_loss,
+                'lambda_val': lambda_val.mean()
             }
 
         grads, lambda_info = jax.grad(lambda_loss_fn,

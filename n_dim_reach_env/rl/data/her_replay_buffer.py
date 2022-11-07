@@ -76,6 +76,7 @@ class HEReplayBuffer(ReplayBuffer):
                  observation_space: gym.Space,
                  action_space: gym.Space,
                  capacity: int,
+                 dict_to_obs_fn: callable,
                  achieved_goal_space: gym.Space,
                  desired_goal_space: Optional[gym.Space] = None,
                  next_observation_space: Optional[gym.Space] = None,
@@ -90,6 +91,7 @@ class HEReplayBuffer(ReplayBuffer):
         observation_space (gym.Space): The observation space of the environment.
         action_space (gym.Space): The action space of the environment.
         capacity (int): number of real transitions (not virtual ones)
+        dict_to_obs_fn (callable): function that converts the dict observation to a numpy array observation.
         achieved_goal_space (gym.Space): gym.Space of the achieved goal
         desired_goal_space (Optional, gym.Space): If omitted, achieved_goal_space will be used.
         next_observation_space (Optional, gym.Space): If omitted, observation_space will be used.
@@ -117,6 +119,7 @@ class HEReplayBuffer(ReplayBuffer):
             self.goal_selection_strategy = KEY_TO_GOAL_STRATEGY[goal_selection_strategy.lower()]
         else:
             self.goal_selection_strategy = goal_selection_strategy
+        self.dict_to_obs_fn = dict_to_obs_fn
         # check if goal_selection_strategy is valid
         assert isinstance(
             self.goal_selection_strategy, GoalSelectionStrategy
@@ -315,9 +318,12 @@ class HEReplayBuffer(ReplayBuffer):
         for k in self.dataset_dict.keys():
             # DroQ cannot handle dict spaces as of yet.
             if k == "observations" or k == "next_observations":
-                batch[k] = np.concatenate((
-                    self.dataset_dict[k]["observation"][indx],
-                    self.dataset_dict[k]["desired_goal"][indx]),  axis=-1)
+                o = {
+                    "observation": self.dataset_dict[k]["observation"][indx],
+                    "achieved_goal": self.dataset_dict[k]["achieved_goal"][indx],
+                    "desired_goal": self.dataset_dict[k]["desired_goal"][indx]
+                }
+                batch[k] = self.dict_to_obs_fn(o)
             else:
                 if isinstance(self.dataset_dict[k], dict):
                     batch[k] = _sample(self.dataset_dict[k], indx)

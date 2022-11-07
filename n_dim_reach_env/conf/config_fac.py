@@ -1,6 +1,6 @@
 """Defines the dataclasses of the config files."""
 from dataclasses import dataclass
-from typing import List
+from typing import List, Dict
 
 
 @dataclass
@@ -57,6 +57,7 @@ class TrainConfig:
     wandb_project: str
     load_checkpoint: int
     load_from_folder: str
+    logging_keys: Dict
 
 
 @dataclass
