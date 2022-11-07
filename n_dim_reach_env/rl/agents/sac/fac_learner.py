@@ -67,7 +67,7 @@ class FACLearner(Agent):
                seed: int,
                observation_space: gym.Space,
                action_space: gym.Space,
-               delta: float = 0.1,
+               delta: float = 10,
                actor_lr: float = 3e-4,
                critic_lr: float = 3e-4,
                cost_critic_lr: float = 3e-4,
@@ -91,7 +91,7 @@ class FACLearner(Agent):
             observation_space (gym.Space): The observation space.
             action_space (gym.Space): The action space.
             delta (float, optional): The cost ratio threshold for constraint violation. Qc(s,a) \leq \delta.
-                Defaults to 0.1.
+                Defaults to 10.
             actor_lr (float, optional): The learning rate for the actor. Defaults to 3e-4.
             critic_lr (float, optional): The learning rate for the critic. Defaults to 3e-4.
             cost_critic_lr (float, optional): The learning rate for the cost critic. Defaults to 3e-4.
@@ -403,7 +403,9 @@ class FACLearner(Agent):
                                              True,
                                              rngs={'dropout': key3})  # training=True
             cost_critic_loss = (0.5 * (qcs - target_qc)**2).mean()
-            return cost_critic_loss, {'cost_critic_loss': cost_critic_loss, 'qc': qcs.mean()}
+            return cost_critic_loss, {'cost_critic_loss': cost_critic_loss,
+                                      'qc': qcs.mean(),
+                                      'batch_costs': batch['costs'].mean()}
 
         grads, info = jax.grad(cost_critic_loss_fn,
                                has_aux=True)(agent.cost_critic.params)

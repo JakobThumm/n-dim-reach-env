@@ -429,6 +429,7 @@ class HEReplayBuffer(ReplayBuffer):
             her_buffer_indices
         )["observations"]["achieved_goal"]
         # Replace goals from transitions that led to a constraint violation with the goal of the episode.
+        """
         if self.use_cost:
             invalid_goals = self.dataset_dict['costs'][her_buffer_indices] > 0
             goals[invalid_goals] = self.sample_non_frozen(
@@ -436,6 +437,7 @@ class HEReplayBuffer(ReplayBuffer):
                 ["observations"],
                 her_buffer_indices[invalid_goals]
             )["observations"]["desired_goal"]
+        """
         return goals
 
     @property

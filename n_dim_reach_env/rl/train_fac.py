@@ -34,7 +34,7 @@ from n_dim_reach_env.rl.evaluation import evaluate  # noqa: F401
 def train_fac(
     env: gym.Env,
     eval_env: gym.Env,
-    delta: float = 0.1,
+    delta: float = 10,
     seed: int = 0,
     agent_kwargs: dict = {},
     max_ep_len: int = 1000,
@@ -46,6 +46,7 @@ def train_fac(
     goal_selection_strategy: str = "future",
     handle_timeout_termination: bool = True,
     utd_ratio: float = 1,
+    update_lambda_every: int = 4,
     batch_size: int = 256,
     buffer_size: int = 1000000,
     eval_interval: int = 10000,
@@ -54,6 +55,7 @@ def train_fac(
     load_checkpoint: int = -1,
     load_from_folder: str = None,
     logging_keys: Optional[Dict] = {"reward": "cum"},
+    train_logging_interval: int = 10,
     use_tqdm: bool = True,
     use_wandb: bool = False,
     wandb_project: str = "n-dim-reach",
@@ -67,7 +69,7 @@ def train_fac(
     Args:
         env (gym.Env): The environment to train on.
         eval_env (gym.Env): The environment to evaluate on.
-        delta (float, optional): The cost ratio threshold for constraint violation. Qc(s,a) \leq \delta. Defaults to 0.1
+        delta (float, optional): The cost ratio threshold for constraint violation. Qc(s,a) \leq \delta. Defaults to 10
         seed (int, optional): The seed to use for the environment and the agent. Defaults to 0.
         agent_kwargs (dict, optional): Additional keyword arguments to pass to the agent. Defaults to {}.
         max_ep_len (int, optional): The maximum episode length. Defaults to 1000.
@@ -80,6 +82,7 @@ def train_fac(
         handle_timeout_termination (bool, optional): Whether to handle the timeout termination signal. Defaults to True.
         utd_ratio (float, optional): The update to data ratio. Defaults to 1.
         batch_size (int, optional): The batch size to use for training. Defaults to 256.
+        update_lambda_every (int, optional): The number of steps between updates of the lambda parameters. Defaults to 4
         buffer_size (int, optional): The size of the replay buffer. Defaults to 1000000.
         eval_interval (int, optional): The number of steps between evaluations. Defaults to 10000.
         eval_episodes (int, optional): The number of episodes to evaluate for. Defaults to 5.
@@ -93,6 +96,8 @@ def train_fac(
                 - "cum": Cumulative logging.
                 - "avg": Average logging.
                 - "max": Maximum logging.
+        train_logging_interval (int, optional): The number of steps between logging the training information.
+            Defaults to 10.
         use_tqdm (bool, optional): Whether to use tqdm for progress bars. Defaults to True.
         use_wandb (bool, optional): Whether to use wandb for logging. Defaults to False.
         wandb_project (str, optional): The wandb project to use. Defaults to "n-dim-reach".
@@ -209,6 +214,23 @@ def train_fac(
     )
     observation, done = env.reset(), False
     logger = Logger(logging_keys=logging_keys)
+    training_logging_keys = {
+        'actor_loss': 'avg',
+        'alpha': 'avg',
+        'batch_costs': 'avg',
+        'cost_critic_loss': 'avg',
+        'critic_loss': 'avg',
+        'entropy': 'avg',
+        'lambda_loss': 'avg',
+        'lambda_val': 'avg',
+        'q': 'avg',
+        'qc': 'avg',
+        'temperature': 'avg',
+        'temperature_loss': 'avg',
+        'lambda_val': 'avg',
+        'lambda_loss': 'avg'
+    }
+    training_logger = Logger(logging_keys=training_logging_keys)
     eval_at_next_done = False
     for i in tqdm.tqdm(range(start_i, int(max_steps)),
                        smoothing=0.1,
@@ -293,10 +315,15 @@ def train_fac(
                 batch = replay_buffer.sample(
                     batch_size*utd_ratio
                 )
-            agent, update_info = agent.update(batch, utd_ratio)
-            if use_wandb and done:  # i % log_interval == 0:
-                for k, v in update_info.items():
-                    wandb.log({f'training/{k}': v}, step=i)
+            update_lambda = (i % update_lambda_every == 0)
+            agent, update_info = agent.update(batch, utd_ratio, update_lambda=update_lambda)
+            training_logger.log(info=update_info)
+            if use_wandb and i % train_logging_interval == 0:
+                train_logging_info = training_logger.get_logging_info()
+                for k, v in train_logging_info.items():
+                    if not k == "length":
+                        wandb.log({f'FAC/{k}': v}, step=i)
+                training_logger.reset()
         if done:
             logging_info = logger.get_logging_info()
             if use_wandb:

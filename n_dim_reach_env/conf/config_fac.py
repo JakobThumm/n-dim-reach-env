@@ -23,6 +23,7 @@ class FACConfig:
     target_entropy: float
     init_temperature: float
     sampled_backup: bool
+    update_lambda_every: int
     buffer_size: int
     use_her: bool
     n_her_samples: int
@@ -58,6 +59,7 @@ class TrainConfig:
     load_checkpoint: int
     load_from_folder: str
     logging_keys: Dict
+    train_logging_interval: int
 
 
 @dataclass
