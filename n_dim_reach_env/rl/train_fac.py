@@ -214,25 +214,7 @@ def train_fac(
     )
     observation, done = env.reset(), False
     logger = Logger(logging_keys=logging_keys)
-    training_logging_keys = {
-        'actor_loss': 'avg',
-        'alpha': 'avg',
-        'batch_costs': 'avg',
-        'cost_critic_loss': 'avg',
-        'critic_loss': 'avg',
-        'entropy': 'avg',
-        'lambda_loss': 'avg',
-        'lambda_val': 'avg',
-        'q': 'avg',
-        'qc': 'avg',
-        'temperature': 'avg',
-        'temperature_loss': 'avg',
-        'lambda_val': 'avg',
-        'lambda_loss': 'avg',
-        'cost_violations': 'avg',
-        'cost_diff': 'avg'
-    }
-    training_logger = Logger(logging_keys=training_logging_keys)
+    last_lambda_log = {}
     eval_at_next_done = False
     for i in tqdm.tqdm(range(start_i, int(max_steps)),
                        smoothing=0.1,
@@ -319,13 +301,12 @@ def train_fac(
                 )
             update_lambda = (i % update_lambda_every == 0)
             agent, update_info = agent.update(batch, utd_ratio, update_lambda=update_lambda)
-            training_logger.log(info=update_info)
+            if "lambda_loss" in update_info:
+                last_lambda_log = update_info
             if use_wandb and i % train_logging_interval == 0:
-                train_logging_info = training_logger.get_logging_info()
-                for k, v in train_logging_info.items():
+                for k, v in last_lambda_log.items():
                     if not k == "length":
                         wandb.log({f'FAC/{k}': v}, step=i)
-                training_logger.reset()
         if done:
             logging_info = logger.get_logging_info()
             if use_wandb:
