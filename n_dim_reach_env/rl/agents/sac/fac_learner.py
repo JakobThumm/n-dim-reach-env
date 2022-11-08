@@ -235,7 +235,7 @@ class FACLearner(Agent):
                                             batch['observations'],
                                             True,
                                             rngs={'dropout': lambda_key})
-            actor_loss = (alpha * log_probs - q + lambda_val * (qc - agent.delta)).mean()
+            actor_loss = (1/(1+lambda_val) * (alpha * log_probs - q + lambda_val * (qc - agent.delta))).mean()
             return actor_loss, {
                 'actor_loss': actor_loss,
                 'entropy': -log_probs.mean(),
