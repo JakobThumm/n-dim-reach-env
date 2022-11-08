@@ -148,21 +148,23 @@ class FACLearner(Agent):
                                           params=critic_params,
                                           tx=optax.GradientTransformation(
                                               lambda _: None, lambda _: None))
-        # Cost critic(s)
+        # Cost critic -> Only one Q network without dropout or layer norm.
+        # Activation function is softplus to ensure Qc(s,a) \geq 0.
         cost_critic_base_cls = partial(MLP,
                                        hidden_dims=hidden_dims,
                                        activate_final=True,
-                                       dropout_rate=critic_dropout_rate,
-                                       use_layer_norm=critic_layer_norm)
-        cost_critic_cls = partial(StateActionValue, base_cls=cost_critic_base_cls)
-        cost_critic_def = Ensemble(cost_critic_cls, num=num_qs)
+                                       dropout_rate=0.0,
+                                       use_layer_norm=False)
+        cost_critic_cls = partial(LambdaMultiplier, base_cls=cost_critic_base_cls)
+        cost_critic_def = StateActionValue(cost_critic_cls)
+        
         cost_critic_params = cost_critic_def.init(cost_critic_key, observations,
                                                   actions)['params']
         cost_critic = TrainState.create(apply_fn=cost_critic_def.apply,
                                         params=cost_critic_params,
                                         tx=optax.adam(learning_rate=cost_critic_lr))
         # Cost target critic(s)
-        target_cost_critic_def = Ensemble(cost_critic_cls, num=num_min_qs or num_qs)
+        target_cost_critic_def = StateActionValue(cost_critic_cls)
         target_cost_critic = TrainState.create(apply_fn=target_cost_critic_def.apply,
                                                params=cost_critic_params,
                                                tx=optax.GradientTransformation(
@@ -223,12 +225,12 @@ class FACLearner(Agent):
                                        True,
                                        rngs={'dropout': critic_key})  # training=True
             q = qs.min(axis=0)
-            qcs = agent.cost_critic.apply_fn({'params': agent.cost_critic.params},
-                                             batch['observations'],
-                                             actions,
-                                             True,
-                                             rngs={'dropout': cost_critic_key})
-            qc = qcs.min(axis=0)
+            qc = agent.cost_critic.apply_fn({'params': agent.cost_critic.params},
+                                            batch['observations'],
+                                            actions,
+                                            True,
+                                            rngs={'dropout': cost_critic_key})
+            # qc = qcs.min(axis=0)
             lambda_val = agent.lam.apply_fn({'params': agent.lam.params},
                                             batch['observations'],
                                             True,
@@ -384,12 +386,12 @@ class FACLearner(Agent):
             target_params = jax.tree_util.tree_map(lambda param: param[indx],
                                                    agent.target_cost_critic.params)
 
-        next_qcs = agent.target_cost_critic.apply_fn({'params': target_params},
-                                                     batch['next_observations'],
-                                                     next_actions,
-                                                     True,
-                                                     rngs={'dropout': key2})  # training=True
-        next_qc = next_qcs.min(axis=0)
+        next_qc = agent.target_cost_critic.apply_fn({'params': target_params},
+                                                    batch['next_observations'],
+                                                    next_actions,
+                                                    True,
+                                                    rngs={'dropout': key2})  # training=True
+        # next_qc = next_qcs.min(axis=0)
 
         target_qc = batch['costs'] + agent.cost_discount * batch['masks'] * next_qc
 
@@ -447,12 +449,12 @@ class FACLearner(Agent):
                                      replace=False)
             target_params = jax.tree_util.tree_map(lambda param: param[indx],
                                                    agent.target_cost_critic.params)
-        qcs = agent.target_cost_critic.apply_fn({'params': target_params},
-                                                batch['observations'],
-                                                actions,
-                                                True,
-                                                rngs={'dropout': cost_critic_dropout_key})  # training=True
-        qc = qcs.min(axis=0)
+        qc = agent.target_cost_critic.apply_fn({'params': target_params},
+                                               batch['observations'],
+                                               actions,
+                                               True,
+                                               rngs={'dropout': cost_critic_dropout_key})  # training=True
+        # qc = qcs.min(axis=0)
 
         def lambda_loss_fn(
                 lambda_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
