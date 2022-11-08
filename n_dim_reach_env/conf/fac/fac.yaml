@@ -5,7 +5,7 @@ temp_lr: 3e-4
 lambda_lr: 3e-5
 hidden_dims: [256, 256, 256]
 discount: 0.97
-cost_discount: 0.98
+cost_discount: 0.99
 tau: 0.0005
 num_qs: 1
 num_min_qs: null

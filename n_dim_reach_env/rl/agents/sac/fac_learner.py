@@ -460,10 +460,12 @@ class FACLearner(Agent):
                                             batch['observations'],
                                             True,
                                             rngs={'dropout': lambda_key})
-            lambda_loss = (-lambda_val * (qc - agent.delta)).mean()
+            lambda_loss = (-lambda_val * (qc - agent.delta) + 1e-9/lambda_val).mean()
             return lambda_loss, {
                 'lambda_loss': lambda_loss,
-                'lambda_val': lambda_val.mean()
+                'lambda_val': lambda_val.mean(),
+                'cost_violations': (qc > agent.delta).mean(),
+                'cost_diff': (qc - agent.delta).mean()
             }
 
         grads, lambda_info = jax.grad(lambda_loss_fn,

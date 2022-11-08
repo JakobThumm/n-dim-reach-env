@@ -228,7 +228,9 @@ def train_fac(
         'temperature': 'avg',
         'temperature_loss': 'avg',
         'lambda_val': 'avg',
-        'lambda_loss': 'avg'
+        'lambda_loss': 'avg',
+        'cost_violations': 'avg',
+        'cost_diff': 'avg'
     }
     training_logger = Logger(logging_keys=training_logging_keys)
     eval_at_next_done = False
