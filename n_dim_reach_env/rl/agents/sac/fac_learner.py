@@ -404,8 +404,9 @@ class FACLearner(Agent):
                                              batch['actions'],
                                              True,
                                              rngs={'dropout': key3})  # training=True
-            cost_critic_loss = (0.5 * (qcs - target_qc)**2).mean()
+            cost_critic_loss = ((target_qc - qcs)**2).mean()
             return cost_critic_loss, {'cost_critic_loss': cost_critic_loss,
+                                      'qc_diff': target_qc.mean() - qcs.mean(),
                                       'qc': qcs.mean(),
                                       'batch_costs': batch['costs'].mean()}
 

@@ -315,8 +315,10 @@ def train_fac(
             print(logging_info)
             logger.reset()
             if eval_at_next_done:
+                cost_queue = []
                 for _ in range(eval_episodes):
                     observation, done = eval_env.reset(), False
+                    cost_sum = 0
                     while not done:
                         if dict_obs:
                             action_observation = dict_to_obs_fn(observation)
@@ -327,10 +329,14 @@ def train_fac(
                                                 eval_env.action_space.low,
                                                 eval_env.action_space.high,
                                                 squash_output)
-                        observation, _, done, _ = eval_env.step(action)
+                        observation, _, done, infos = eval_env.step(action)
+                        if "cost" in infos:
+                            cost_sum += infos["cost"]
+                    cost_queue.append(cost_sum)
                 eval_info = {
                     'return': np.mean(eval_env.return_queue),
-                    'length': np.mean(eval_env.length_queue)
+                    'length': np.mean(eval_env.length_queue),
+                    'cum_ep_cost': np.mean(cost_queue)
                 }
                 print("Eval info:", eval_info)
                 if eval_callback is not None:

@@ -1,11 +1,11 @@
 max_steps: 10000000
-eval_interval: 10000
-eval_episodes: 1
+eval_interval: 20000
+eval_episodes: 10
 tqdm: true
 use_wandb: true
 wandb_project: constrained-her
 load_checkpoint: -1 #20000
-load_from_folder: null # /home/jakob/Promotion/code/n-dim-reach-env/outputs/2022-11-08/13-50-18/
+load_from_folder: null #/home/jakob/Promotion/code/n-dim-reach-env/outputs/2022-11-08/15-42-07/
 train_logging_interval: 50
 logging_keys:
   reward: ["cum", "max"]
