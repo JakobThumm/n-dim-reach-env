@@ -210,7 +210,7 @@ class FACLearner(Agent):
 
         Loss = \alpha * log(\pi(a|s)) - Q(s, \pi(a|s)) + \lambda(s) * (Q_c(s, \pi(a|s)) - d)
         """
-        rng, action_key, critic_key, cost_critic_key, lambda_key = jax.random.split(agent.rng, 5)
+        rng, action_key, critic_key = jax.random.split(agent.rng, 3)
 
         def actor_loss_fn(
                 actor_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
@@ -227,15 +227,14 @@ class FACLearner(Agent):
             q = qs.min(axis=0)
             qc = agent.cost_critic.apply_fn({'params': agent.cost_critic.params},
                                             batch['observations'],
-                                            actions,
-                                            True,
-                                            rngs={'dropout': cost_critic_key})
+                                            actions)
             # qc = qcs.min(axis=0)
             lambda_val = agent.lam.apply_fn({'params': agent.lam.params},
-                                            batch['observations'],
-                                            True,
-                                            rngs={'dropout': lambda_key})
-            actor_loss = (1/(1+lambda_val) * (alpha * log_probs - q + lambda_val * (qc - agent.delta))).mean()
+                                            batch['observations'])
+            cost_term = (lambda_val * (qc - agent.delta)).mean()
+            value_term = (alpha * log_probs - q).mean()
+            lambda_reqularization = 1/(1+lambda_val.mean())
+            actor_loss = lambda_reqularization * (value_term + cost_term)
             return actor_loss, {
                 'actor_loss': actor_loss,
                 'entropy': -log_probs.mean(),
