@@ -229,13 +229,19 @@ def train_fac(
             else:
                 action_observation = observation
             action, agent = agent.sample_actions(action_observation)
+            if np.any(np.isnan(action)):
+                print("NAN ACTION")
+                action = env.action_space.sample()
             # Agent outputs action in [-1, 1] but we want to step in [low, high]
             action = unscale_action(action,
                                     env.action_space.low,
                                     env.action_space.high,
                                     squash_output)
         next_observation, reward, done, info = env.step(action)
-        assert "cost" in info, "Cost not in info dict"
+        if "cost" not in info:
+            print("[WARNING] Cost not in info dict")
+            info["cost"] = 1
+            done = True
         # Logging
         logger.log(info=info, reward=reward)
 

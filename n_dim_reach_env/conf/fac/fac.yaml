@@ -1,9 +1,9 @@
-actor_lr: 0.004
+actor_lr: 1e-4
 critic_lr: 3e-5
 cost_critic_lr: 3e-5
 temp_lr: 3e-4
 lambda_lr: 3e-5
-hidden_dims: [256, 256, 256]
+hidden_dims: [256, 256]
 discount: 0.97
 cost_discount: 0.99
 tau: 0.0005

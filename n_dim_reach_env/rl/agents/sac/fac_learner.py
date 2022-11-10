@@ -278,10 +278,11 @@ class FACLearner(Agent):
             agent, batch: DatasetDict) -> Tuple[TrainState, Dict[str, float]]:
         r"""Update the critic(s).
 
+        The entropy loss is scaled by lambda to prevent exploding gradients when lambda is large.
         Q_target = r + gamma * mask * Q(s', \pi(s')),
             where mask = 1 if not done else 0.
         if sampled_backup:
-            Q_target -= gamma * mask * \alpha * log(\pi(a|s'))
+            Q_target -= gamma * mask * \alpha / (1 + \lambda) * log(\pi(a|s'))
         Loss = 0.5 * (Q(s, a) - Q_target)^2
         """
         dist = agent.actor.apply_fn({'params': agent.actor.params},
@@ -321,8 +322,10 @@ class FACLearner(Agent):
 
         if agent.sampled_backup:
             next_log_probs = dist.log_prob(next_actions)
+            lambda_val = agent.lam.apply_fn({'params': agent.lam.params},
+                                            batch['observations'])
             alpha = agent.temp.apply_fn({'params': agent.temp.params})
-            target_q -= agent.discount * batch['masks'] * alpha * next_log_probs
+            target_q -= agent.discount * batch['masks'] * alpha / (1+lambda_val) * next_log_probs
 
         key3, rng = jax.random.split(rng)
 
