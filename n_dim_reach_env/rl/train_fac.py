@@ -229,9 +229,7 @@ def train_fac(
             else:
                 action_observation = observation
             action, agent = agent.sample_actions(action_observation)
-            if np.any(np.isnan(action)):
-                print("NAN ACTION")
-                action = env.action_space.sample()
+            assert not np.any(np.isnan(action)), f"NaN action. Check your agent. Observation: {action_observation}"
             # Agent outputs action in [-1, 1] but we want to step in [low, high]
             action = unscale_action(action,
                                     env.action_space.low,

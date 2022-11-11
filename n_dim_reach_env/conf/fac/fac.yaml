@@ -1,8 +1,8 @@
-actor_lr: 1e-4
+actor_lr: 4e-3
 critic_lr: 3e-5
 cost_critic_lr: 3e-5
 temp_lr: 3e-4
-lambda_lr: 3e-5
+lambda_lr: 1e-4
 hidden_dims: [256, 256]
 discount: 0.99
 cost_discount: 0.99
@@ -14,7 +14,7 @@ critic_layer_norm: false
 target_entropy: -1
 init_temperature: 0.1
 sampled_backup: true
-update_lambda_every: 4
+update_lambda_every: 1
 buffer_size: 1000000
 use_her: false
 n_her_samples: 4

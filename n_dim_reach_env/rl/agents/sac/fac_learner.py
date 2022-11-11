@@ -231,7 +231,7 @@ class FACLearner(Agent):
             # qc = qcs.min(axis=0)
             lambda_val = agent.lam.apply_fn({'params': agent.lam.params},
                                             batch['observations'])
-            cost_term = (lambda_val * (qc - agent.delta)).mean()
+            cost_term = (lambda_val * qc).mean()
             value_term = (alpha * log_probs - q).mean()
             lambda_reqularization = 1/(1+lambda_val.mean())
             actor_loss = lambda_reqularization * (value_term + cost_term)
