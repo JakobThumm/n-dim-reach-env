@@ -30,6 +30,17 @@ from n_dim_reach_env.rl.networks.common import soft_target_update
 class FACLearner(Agent):
     r"""The Feasible Actor-Critic (FAC) learner.
 
+    We utilize DroQ for underestimation of the Q-function.
+    https://arxiv.org/pdf/2110.02034.pdf
+
+    Our network architecture is:
+        - N Q-functions (ensemble)
+        - N target Q-functions (ensemble)
+        - N cost Q-functions (ensemble)
+        - N target cost Q-functions (ensemble)
+        - 1 actor
+        - 1 lambda multiplier network (either state-dependent or not)
+
     Args:
         critic: The critic network.
         target_critic: The target critic network.
@@ -106,8 +117,9 @@ class FACLearner(Agent):
             cost_discount (float, optional): The discount factor for the constraint critic. Defaults to 0.99.
             discount (float, optional): The discount factor. Defaults to 0.99.
             tau (float, optional): The soft target update coefficient. Defaults to 0.005.
-            num_qs (int, optional): The number of Q networks in the critic and cost critic ensembles. Defaults to 2.
-            num_min_qs (Optional[int], optional): See M in RedQ https://arxiv.org/abs/2101.05982. Defaults to None.
+            num_qs (int, optional): The number of Q networks (N) in the critic and cost critic ensembles. Defaults to 2.
+            num_min_qs (Optional[int], optional): Optionally, use M < N randomly selected target Q networks for the
+                target in the critic update.
             critic_dropout_rate (Optional[float], optional): The dropout rate for the critic networks. Defaults to None.
             critic_layer_norm (bool, optional): Whether to use layer normalization in the critic networks.
                 Defaults to False.
@@ -118,6 +130,8 @@ class FACLearner(Agent):
             init_lambda (float, optional): The initial lambda multiplier for non-state-dependent lambda.
                 Defaults to 100.0.
         """
+        if num_min_qs is not None:
+            assert num_min_qs < num_qs, "M must be smaller than N"
         action_dim = action_space.shape[-1]
         observations = observation_space.sample()
         actions = action_space.sample()
@@ -155,27 +169,26 @@ class FACLearner(Agent):
                                           params=critic_params,
                                           tx=optax.GradientTransformation(
                                               lambda _: None, lambda _: None))
-        # Cost critic -> Only one Q network without dropout or layer norm.
-        # Activation function is softplus to ensure Qc(s,a) \geq 0.
+        # Cost critic(s)
         cost_critic_base_cls = partial(MLP,
                                        hidden_dims=hidden_dims,
                                        activate_final=True,
-                                       dropout_rate=0.0,
-                                       use_layer_norm=False)
-        cost_critic_cls = partial(LambdaMultiplier, base_cls=cost_critic_base_cls)
-        cost_critic_def = StateActionValue(cost_critic_cls)
-
+                                       dropout_rate=critic_dropout_rate,
+                                       use_layer_norm=critic_layer_norm)
+        cost_critic_pos_cls = partial(LambdaMultiplier, base_cls=cost_critic_base_cls)
+        cost_critic_cls = partial(StateActionValue, base_cls=cost_critic_pos_cls)
+        cost_critic_def = Ensemble(cost_critic_cls, num=num_qs)
         cost_critic_params = cost_critic_def.init(cost_critic_key, observations,
                                                   actions)['params']
         cost_critic = TrainState.create(apply_fn=cost_critic_def.apply,
                                         params=cost_critic_params,
                                         tx=optax.adam(learning_rate=cost_critic_lr))
-        # Cost target critic(s)
-        target_cost_critic_def = StateActionValue(cost_critic_cls)
+        # Target critic(s)
+        target_cost_critic_def = Ensemble(cost_critic_cls, num=num_min_qs or num_qs)
         target_cost_critic = TrainState.create(apply_fn=target_cost_critic_def.apply,
                                                params=cost_critic_params,
                                                tx=optax.GradientTransformation(
-                                                   lambda _: None, lambda _: None))
+                                                    lambda _: None, lambda _: None))
         # Temperature
         temp_def = Temperature(init_temperature)
         temp_params = temp_def.init(temp_key)['params']
@@ -223,12 +236,23 @@ class FACLearner(Agent):
                      batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
         r"""Update the actor.
 
-        Loss = \alpha * log(\pi(a|s)) - Q(s, \pi(a|s)) + \lambda(s) * (Q_c(s, \pi(a|s)) - d)
-        """
-        rng, action_key, critic_key = jax.random.split(agent.rng, 3)
+        The actor loss uses the MEAN over the critic values and the cost critic values.
+        We do this to avoid double "truncation" of the critic values.
 
-        def actor_loss_fn(
-                actor_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
+        Loss = \alpha * log(\pi(a|s)) - Q(s, \pi(a|s)) + \lambda(s) * (Q_c(s, \pi(a|s)) - d)
+
+        The original FAC implementation separates the loss in a value and a cost part:
+        Loss_value = \mathcal{E}_(s, a) (\alpha * log(\pi(a|s)) - Q(s, \pi(a|s)))
+        Loss_cost = \mathcal{E}_(s, a) (\lambda(s) * (Q_c(s, \pi(a|s)) - d))
+        Loss = Loss_value + Loss_cost
+
+        To prevent exploding actor gradients, we use lambda regularization:
+        regu = \mathcal{E}_s 1 / (1 + \lambda(s))
+        Loss = regu * (Loss_value + Loss_cost)
+        """
+        rng, action_key, critic_key, cost_critic_key = jax.random.split(agent.rng, 4)
+
+        def actor_loss_fn(actor_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
             dist = agent.actor.apply_fn({'params': actor_params},
                                         batch['observations'])
             actions = dist.sample(seed=action_key)
@@ -238,18 +262,20 @@ class FACLearner(Agent):
                                        batch['observations'],
                                        actions,
                                        True,
-                                       rngs={'dropout': critic_key})  # training=True
-            q = qs.min(axis=0)
-            qc = agent.cost_critic.apply_fn({'params': agent.cost_critic.params},
-                                            batch['observations'],
-                                            actions)
-            # qc = qcs.min(axis=0)
+                                       rngs={'dropout': critic_key})
+            q = qs.mean(axis=0)
+            qcs = agent.cost_critic.apply_fn({'params': agent.cost_critic.params},
+                                             batch['observations'],
+                                             actions,
+                                             True,
+                                             rngs={'dropout': cost_critic_key})
+            qc = qcs.mean(axis=0)
             if agent.state_dependent_lambda:
                 lambda_val = agent.lam.apply_fn({'params': agent.lam.params},
                                                 batch['observations'])
             else:
                 lambda_val = agent.lam.apply_fn({'params': agent.lam.params})
-            cost_term = (lambda_val * (qc-agent.delta)).mean()
+            cost_term = (lambda_val * (qc - agent.delta)).mean()
             value_term = (alpha * log_probs - q).mean()
             lambda_reqularization = 1/(1+lambda_val.mean())
             actor_loss = lambda_reqularization * (value_term + cost_term)
@@ -295,12 +321,15 @@ class FACLearner(Agent):
             agent, batch: DatasetDict) -> Tuple[TrainState, Dict[str, float]]:
         r"""Update the critic(s).
 
+        The target for updating the critics is taken from the MINIMUM over target critics.
+        The minimum is used to avoid overapproximation of the true value function.
+
         The entropy loss is scaled by lambda to prevent exploding gradients when lambda is large.
-        Q_target = r + gamma * mask * Q(s', \pi(s')),
-            where mask = 1 if not done else 0.
+        y = r + gamma * mask * min_{i=1..M}(Q^{i}_{target}(s', \pi(s')),
+            where mask = 1 if not done else 0 and M=N if not specified otherwise.
         if sampled_backup:
-            Q_target -= gamma * mask * \alpha / (1 + \lambda) * log(\pi(a|s'))
-        Loss = 0.5 * (Q(s, a) - Q_target)^2
+            y -= gamma * mask * \alpha * 1 / (1 + \lambda) * log(\pi(a|s'))
+        Loss = 0.5 * (Q(s, a) - y)^2
         """
         dist = agent.actor.apply_fn({'params': agent.actor.params},
                                     batch['next_observations'])
@@ -331,11 +360,10 @@ class FACLearner(Agent):
                                                batch['next_observations'],
                                                next_actions,
                                                True,
-                                               rngs={'dropout':
-                                                     key2})  # training=True
+                                               rngs={'dropout': key2})
         next_q = next_qs.min(axis=0)
 
-        target_q = batch['rewards'] + agent.discount * batch['masks'] * next_q
+        y = batch['rewards'] + agent.discount * batch['masks'] * next_q
 
         if agent.sampled_backup:
             next_log_probs = dist.log_prob(next_actions)
@@ -344,7 +372,7 @@ class FACLearner(Agent):
             else:
                 lambda_val = agent.lam.apply_fn({'params': agent.lam.params})
             alpha = agent.temp.apply_fn({'params': agent.temp.params})
-            target_q -= agent.discount * batch['masks'] * alpha / (1+lambda_val.mean()) * next_log_probs
+            y -= agent.discount * batch['masks'] * alpha / (1+lambda_val.mean()) * next_log_probs
 
         key3, rng = jax.random.split(rng)
 
@@ -354,9 +382,12 @@ class FACLearner(Agent):
                                        batch['observations'],
                                        batch['actions'],
                                        True,
-                                       rngs={'dropout': key3})  # training=True
-            critic_loss = (0.5 * (qs - target_q)**2).mean()
-            return critic_loss, {'critic_loss': critic_loss, 'q': qs.mean()}
+                                       rngs={'dropout': key3})
+            critic_loss = (0.5 * (qs - y)**2).mean()
+            return critic_loss, {'critic_loss': critic_loss,
+                                 'q': qs.mean(),
+                                 'batch_reward': batch['rewards'].mean(),
+                                 'critic_target': y.mean()}
 
         grads, info = jax.grad(critic_loss_fn,
                                has_aux=True)(agent.critic.params)
@@ -379,9 +410,13 @@ class FACLearner(Agent):
             agent, batch: DatasetDict) -> Tuple[TrainState, Dict[str, float]]:
         r"""Update the cost critic(s).
 
-        Qc_target = c + gamma_c * mask * Qc(s', \pi(s')),
-            where mask = 1 if not done else 0.
-        Loss = 0.5 * (Qc(s, a) - Qc_target)^2
+        The target for updating the cost critics is taken from the MAXIMUM over target cost critics.
+        The maximum is used to avoid underapproximation of the true cost function.
+
+        y_c = c + gamma_c * mask * max_{i=1..M}(Q^{i}_{c, target}(s', \pi(s')),
+            where mask = 1 if not done else 0 and M=N if not specified otherwise.
+
+        Loss = 0.5 * (Q(s, a) - y_c)^2
         """
         dist = agent.actor.apply_fn({'params': agent.actor.params},
                                     batch['next_observations'])
@@ -408,14 +443,14 @@ class FACLearner(Agent):
             target_params = jax.tree_util.tree_map(lambda param: param[indx],
                                                    agent.target_cost_critic.params)
 
-        next_qc = agent.target_cost_critic.apply_fn({'params': target_params},
-                                                    batch['next_observations'],
-                                                    next_actions,
-                                                    True,
-                                                    rngs={'dropout': key2})  # training=True
-        # next_qc = next_qcs.min(axis=0)
+        next_qcs = agent.target_cost_critic.apply_fn({'params': target_params},
+                                                     batch['next_observations'],
+                                                     next_actions,
+                                                     True,
+                                                     rngs={'dropout': key2})
+        next_qc = next_qcs.max(axis=0)
 
-        target_qc = batch['costs'] + agent.cost_discount * batch['masks'] * next_qc
+        y_c = batch['costs'] + agent.cost_discount * batch['masks'] * next_qc
 
         key3, rng = jax.random.split(rng)
 
@@ -425,10 +460,9 @@ class FACLearner(Agent):
                                              batch['observations'],
                                              batch['actions'],
                                              True,
-                                             rngs={'dropout': key3})  # training=True
-            cost_critic_loss = ((target_qc - qcs)**2).mean()
+                                             rngs={'dropout': key3})
+            cost_critic_loss = (1/2 * (y_c - qcs)**2).mean()
             return cost_critic_loss, {'cost_critic_loss': cost_critic_loss,
-                                      'qc_diff': target_qc.mean() - qcs.mean(),
                                       'qc': qcs.mean(),
                                       'batch_costs': batch['costs'].mean()}
 
@@ -451,7 +485,11 @@ class FACLearner(Agent):
     def update_lambda(agent, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
         r"""Update the lambda multiplicator.
 
-        Loss = - \lambda(s) * (Qc(s, \pi(s)) - delta)
+        The lambda loss uses the MEAN over the cost critic values.
+        We do this to avoid double "truncation" of the cost critic values.
+
+        Loss = - \lambda(s) * (Q_c(s, \pi(s)) - delta) + \epsilon / \lambda(s),
+            where \epsilon is a small constant to avoid diminishing gradients.
         """
         rng, action_key, cost_critic_key, cost_critic_dropout_key, lambda_key = jax.random.split(agent.rng, 5)
         dist = agent.actor.apply_fn({'params': agent.actor.params}, batch['observations'])
@@ -470,30 +508,26 @@ class FACLearner(Agent):
                                      replace=False)
             cost_critic_params = jax.tree_util.tree_map(lambda param: param[indx],
                                                         agent.cost_critic.params)
-        qc = agent.cost_critic.apply_fn({'params': cost_critic_params},
-                                        batch['observations'],
-                                        actions,
-                                        True,
-                                        rngs={'dropout': cost_critic_dropout_key})  # training=True
+        qcs = agent.cost_critic.apply_fn({'params': cost_critic_params},
+                                         batch['observations'],
+                                         actions,
+                                         True,
+                                         rngs={'dropout': cost_critic_dropout_key})
+        qc = qcs.mean(axis=0)
 
         def lambda_loss_fn(lambda_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
             if agent.state_dependent_lambda:
-                lambda_val = agent.lam.apply_fn({'params': lambda_params},
-                                                batch['observations'],
-                                                True,
-                                                rngs={'dropout': lambda_key})
+                lambda_val = agent.lam.apply_fn({'params': lambda_params}, batch['observations'])
             else:
                 lambda_val = agent.lam.apply_fn({'params': lambda_params})
             lambda_loss = (-lambda_val * (qc - agent.delta) + 1e-9/lambda_val).mean()
             return lambda_loss, {
                 'lambda_loss': lambda_loss,
                 'lambda_val': lambda_val.mean(),
-                'cost_violations': (qc > agent.delta).mean(),
                 'cost_diff': (qc - agent.delta).mean()
             }
 
-        grads, lambda_info = jax.grad(lambda_loss_fn,
-                                      has_aux=True)(agent.lam.params)
+        grads, lambda_info = jax.grad(lambda_loss_fn, has_aux=True)(agent.lam.params)
         lam = agent.lam.apply_gradients(grads=grads)
 
         agent = agent.replace(lam=lam, rng=rng)
