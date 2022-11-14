@@ -33,6 +33,8 @@ class FACConfig:
     batch_size: int
     utd_ratio: int
     squash_output: bool
+    state_dependent_lambda: bool
+    init_lambda: float
 
 
 @dataclass

@@ -19,7 +19,8 @@ from flax import struct
 from flax.training.train_state import TrainState
 
 from n_dim_reach_env.rl.agents.agent import Agent
-from n_dim_reach_env.rl.agents.sac.temperature import Temperature
+from n_dim_reach_env.rl.networks.temperature import Temperature
+from n_dim_reach_env.rl.networks.single_lambda import SingleLambda
 from n_dim_reach_env.rl.data.dataset import DatasetDict
 from n_dim_reach_env.rl.distributions import TanhNormal
 from n_dim_reach_env.rl.networks import MLP, Ensemble, StateActionValue, LambdaMultiplier
@@ -60,7 +61,8 @@ class FACLearner(Agent):
     num_min_qs: Optional[int] = struct.field(
         pytree_node=False)  # See M in RedQ https://arxiv.org/abs/2101.05982
     sampled_backup: bool = struct.field(pytree_node=False)
-    delta: float = 0.1
+    delta: float = struct.field(pytree_node=False)
+    state_dependent_lambda: bool = struct.field(pytree_node=False)
 
     @classmethod
     def create(cls,
@@ -83,7 +85,9 @@ class FACLearner(Agent):
                critic_layer_norm: bool = False,
                target_entropy: Optional[float] = None,
                init_temperature: float = 1.0,
-               sampled_backup: bool = True):
+               sampled_backup: bool = True,
+               state_dependent_lambda: bool = False,
+               init_lambda: float = 100.0,):
         r"""Create the FAC agent and its optimizers.
 
         Args:
@@ -110,6 +114,9 @@ class FACLearner(Agent):
             target_entropy (Optional[float], optional): The target entropy. Defaults to None.
             init_temperature (float, optional): The initial temperature. Defaults to 1.0.
             sampled_backup (bool, optional): Whether to use sampled backups. Defaults to True.
+            state_dependent_lambda (bool, optional): Whether to use a state-dependent lambda multiplier.
+            init_lambda (float, optional): The initial lambda multiplier for non-state-dependent lambda.
+                Defaults to 100.0.
         """
         action_dim = action_space.shape[-1]
         observations = observation_space.sample()
@@ -157,7 +164,7 @@ class FACLearner(Agent):
                                        use_layer_norm=False)
         cost_critic_cls = partial(LambdaMultiplier, base_cls=cost_critic_base_cls)
         cost_critic_def = StateActionValue(cost_critic_cls)
-        
+
         cost_critic_params = cost_critic_def.init(cost_critic_key, observations,
                                                   actions)['params']
         cost_critic = TrainState.create(apply_fn=cost_critic_def.apply,
@@ -176,16 +183,23 @@ class FACLearner(Agent):
                                  params=temp_params,
                                  tx=optax.adam(learning_rate=temp_lr))
         # Lambda
-        lambda_base_cls = partial(MLP,
-                                  hidden_dims=hidden_dims,
-                                  activate_final=True,
-                                  dropout_rate=0.0,
-                                  use_layer_norm=False)
-        lambda_def = LambdaMultiplier(base_cls=lambda_base_cls)
-        lambda_params = lambda_def.init(lambda_key, observations)['params']
-        lam = TrainState.create(apply_fn=lambda_def.apply,
-                                params=lambda_params,
-                                tx=optax.adam(learning_rate=lambda_lr))
+        if state_dependent_lambda:
+            lambda_base_cls = partial(MLP,
+                                      hidden_dims=hidden_dims,
+                                      activate_final=True,
+                                      dropout_rate=0.0,
+                                      use_layer_norm=False)
+            lambda_def = LambdaMultiplier(base_cls=lambda_base_cls)
+            lambda_params = lambda_def.init(lambda_key, observations)['params']
+            lam = TrainState.create(apply_fn=lambda_def.apply,
+                                    params=lambda_params,
+                                    tx=optax.adam(learning_rate=lambda_lr))
+        else:
+            lambda_def = SingleLambda(init_lambda)
+            lambda_params = lambda_def.init(lambda_key)['params']
+            lam = TrainState.create(apply_fn=lambda_def.apply,
+                                    params=lambda_params,
+                                    tx=optax.adam(learning_rate=lambda_lr))
         return cls(rng=rng,
                    actor=actor,
                    critic=critic,
@@ -201,7 +215,8 @@ class FACLearner(Agent):
                    num_qs=num_qs,
                    num_min_qs=num_min_qs,
                    sampled_backup=sampled_backup,
-                   delta=delta)
+                   delta=delta,
+                   state_dependent_lambda=state_dependent_lambda)
 
     @staticmethod
     def update_actor(agent,
@@ -229,9 +244,12 @@ class FACLearner(Agent):
                                             batch['observations'],
                                             actions)
             # qc = qcs.min(axis=0)
-            lambda_val = agent.lam.apply_fn({'params': agent.lam.params},
-                                            batch['observations'])
-            cost_term = (lambda_val * qc).mean()
+            if agent.state_dependent_lambda:
+                lambda_val = agent.lam.apply_fn({'params': agent.lam.params},
+                                                batch['observations'])
+            else:
+                lambda_val = agent.lam.apply_fn({'params': agent.lam.params})
+            cost_term = (lambda_val * (qc-agent.delta)).mean()
             value_term = (alpha * log_probs - q).mean()
             lambda_reqularization = 1/(1+lambda_val.mean())
             actor_loss = lambda_reqularization * (value_term + cost_term)
@@ -321,10 +339,12 @@ class FACLearner(Agent):
 
         if agent.sampled_backup:
             next_log_probs = dist.log_prob(next_actions)
-            lambda_val = agent.lam.apply_fn({'params': agent.lam.params},
-                                            batch['observations'])
+            if agent.state_dependent_lambda:
+                lambda_val = agent.lam.apply_fn({'params': agent.lam.params}, batch['observations'])
+            else:
+                lambda_val = agent.lam.apply_fn({'params': agent.lam.params})
             alpha = agent.temp.apply_fn({'params': agent.temp.params})
-            target_q -= agent.discount * batch['masks'] * alpha / (1+lambda_val) * next_log_probs
+            target_q -= agent.discount * batch['masks'] * alpha / (1+lambda_val.mean()) * next_log_probs
 
         key3, rng = jax.random.split(rng)
 
@@ -428,43 +448,42 @@ class FACLearner(Agent):
         return new_agent, info
 
     @staticmethod
-    def update_lambda(agent,
-                      batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
+    def update_lambda(agent, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
         r"""Update the lambda multiplicator.
 
-        Loss = - lambda(s) * (Qc(s, \pi(s)) - delta)
+        Loss = - \lambda(s) * (Qc(s, \pi(s)) - delta)
         """
         rng, action_key, cost_critic_key, cost_critic_dropout_key, lambda_key = jax.random.split(agent.rng, 5)
-        dist = agent.actor.apply_fn({'params': agent.actor.params},
-                                    batch['observations'])
+        dist = agent.actor.apply_fn({'params': agent.actor.params}, batch['observations'])
         if agent.sampled_backup:
             actions = dist.sample(seed=action_key)
         else:
             actions = dist.mode()
 
         if agent.num_min_qs is None:
-            target_params = agent.target_cost_critic.params
+            cost_critic_params = agent.cost_critic.params
         else:
             all_indx = jnp.arange(0, agent.num_qs)
             indx = jax.random.choice(cost_critic_key,
                                      a=all_indx,
                                      shape=(agent.num_min_qs, ),
                                      replace=False)
-            target_params = jax.tree_util.tree_map(lambda param: param[indx],
-                                                   agent.target_cost_critic.params)
-        qc = agent.target_cost_critic.apply_fn({'params': target_params},
-                                               batch['observations'],
-                                               actions,
-                                               True,
-                                               rngs={'dropout': cost_critic_dropout_key})  # training=True
-        # qc = qcs.min(axis=0)
+            cost_critic_params = jax.tree_util.tree_map(lambda param: param[indx],
+                                                        agent.cost_critic.params)
+        qc = agent.cost_critic.apply_fn({'params': cost_critic_params},
+                                        batch['observations'],
+                                        actions,
+                                        True,
+                                        rngs={'dropout': cost_critic_dropout_key})  # training=True
 
-        def lambda_loss_fn(
-                lambda_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
-            lambda_val = agent.lam.apply_fn({'params': lambda_params},
-                                            batch['observations'],
-                                            True,
-                                            rngs={'dropout': lambda_key})
+        def lambda_loss_fn(lambda_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
+            if agent.state_dependent_lambda:
+                lambda_val = agent.lam.apply_fn({'params': lambda_params},
+                                                batch['observations'],
+                                                True,
+                                                rngs={'dropout': lambda_key})
+            else:
+                lambda_val = agent.lam.apply_fn({'params': lambda_params})
             lambda_loss = (-lambda_val * (qc - agent.delta) + 1e-9/lambda_val).mean()
             return lambda_loss, {
                 'lambda_loss': lambda_loss,

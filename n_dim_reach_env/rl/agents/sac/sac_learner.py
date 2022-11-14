@@ -11,7 +11,7 @@ from flax import struct
 from flax.training.train_state import TrainState
 
 from n_dim_reach_env.rl.agents.agent import Agent
-from n_dim_reach_env.rl.agents.sac.temperature import Temperature
+from n_dim_reach_env.rl.networks.temperature import Temperature
 from n_dim_reach_env.rl.data.dataset import DatasetDict
 from n_dim_reach_env.rl.distributions import TanhNormal
 from n_dim_reach_env.rl.networks import MLP, Ensemble, StateActionValue

@@ -62,7 +62,9 @@ def main(cfg: FACTrainingConfig):
         "critic_layer_norm": cfg.fac.critic_layer_norm,
         "target_entropy": cfg.fac.target_entropy,
         "init_temperature": cfg.fac.init_temperature,
-        "sampled_backup": cfg.fac.sampled_backup
+        "sampled_backup": cfg.fac.sampled_backup,
+        "state_dependent_lambda": cfg.fac.state_dependent_lambda,
+        "init_lambda": cfg.fac.init_lambda
     }
     learn_args = {
         "seed": cfg.env.seed,
