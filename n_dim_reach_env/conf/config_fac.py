@@ -35,6 +35,7 @@ class FACConfig:
     squash_output: bool
     state_dependent_lambda: bool
     init_lambda: float
+    lambda_regularization: float
 
 
 @dataclass

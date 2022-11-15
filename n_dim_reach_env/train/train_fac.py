@@ -65,6 +65,7 @@ def main(cfg: FACTrainingConfig):
         "sampled_backup": cfg.fac.sampled_backup,
         "state_dependent_lambda": cfg.fac.state_dependent_lambda,
         "init_lambda": cfg.fac.init_lambda
+        "lambda_regularization": cfg.fac.lambda_regularization,
     }
     learn_args = {
         "seed": cfg.env.seed,

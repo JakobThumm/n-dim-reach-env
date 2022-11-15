@@ -1,9 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-cost_rate = 0.06
+cost_rate = 0.85
 Qc = 0
-discount = 0.8
+discount = 0.99
 lr = 1e-3
 batch_size = 10
 ep_length = 1000

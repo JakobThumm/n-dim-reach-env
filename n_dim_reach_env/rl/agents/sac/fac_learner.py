@@ -74,6 +74,7 @@ class FACLearner(Agent):
     sampled_backup: bool = struct.field(pytree_node=False)
     delta: float = struct.field(pytree_node=False)
     state_dependent_lambda: bool = struct.field(pytree_node=False)
+    lambda_regularization: Optional[float] = struct.field(pytree_node=False)
 
     @classmethod
     def create(cls,
@@ -98,7 +99,8 @@ class FACLearner(Agent):
                init_temperature: float = 1.0,
                sampled_backup: bool = True,
                state_dependent_lambda: bool = False,
-               init_lambda: float = 100.0,):
+               init_lambda: float = 100.0,
+               lambda_regularization: Optional[float] = None):
         r"""Create the FAC agent and its optimizers.
 
         Args:
@@ -129,6 +131,8 @@ class FACLearner(Agent):
             state_dependent_lambda (bool, optional): Whether to use a state-dependent lambda multiplier.
             init_lambda (float, optional): The initial lambda multiplier for non-state-dependent lambda.
                 Defaults to 100.0.
+            lambda_regularization (Optional[float], optional): Regularize the loss by c/(c+\lambda) to prevent exploding
+                gradients due to large lambdas.
         """
         if num_min_qs is not None:
             assert num_min_qs < num_qs, "M must be smaller than N"
@@ -229,7 +233,8 @@ class FACLearner(Agent):
                    num_min_qs=num_min_qs,
                    sampled_backup=sampled_backup,
                    delta=delta,
-                   state_dependent_lambda=state_dependent_lambda)
+                   state_dependent_lambda=state_dependent_lambda,
+                   lambda_regularization=lambda_regularization)
 
     @staticmethod
     def update_actor(agent,
@@ -277,10 +282,15 @@ class FACLearner(Agent):
                 lambda_val = agent.lam.apply_fn({'params': agent.lam.params})
             cost_term = (lambda_val * (qc - agent.delta)).mean()
             value_term = (alpha * log_probs - q).mean()
-            lambda_reqularization = 1/(1+lambda_val.mean())
+            if agent.lambda_regularization is not None:
+                lambda_reqularization = agent.lambda_regularization/(agent.lambda_regularization+lambda_val.mean())
+            else:
+                lambda_reqularization = 1
             actor_loss = lambda_reqularization * (value_term + cost_term)
             return actor_loss, {
                 'actor_loss': actor_loss,
+                'actor_value_loss': value_term.mean(),
+                'actor_cost_loss': cost_term.mean(),
                 'entropy': -log_probs.mean(),
                 'alpha': alpha.mean(),
             }
@@ -372,7 +382,11 @@ class FACLearner(Agent):
             else:
                 lambda_val = agent.lam.apply_fn({'params': agent.lam.params})
             alpha = agent.temp.apply_fn({'params': agent.temp.params})
-            y -= agent.discount * batch['masks'] * alpha / (1+lambda_val.mean()) * next_log_probs
+            if agent.lambda_regularization is not None:
+                lambda_reqularization = agent.lambda_regularization/(agent.lambda_regularization+lambda_val.mean())
+            else:
+                lambda_reqularization = 1
+            y -= agent.discount * batch['masks'] * alpha * lambda_reqularization * next_log_probs
 
         key3, rng = jax.random.split(rng)
 
