@@ -292,7 +292,6 @@ class FACLearner(Agent):
                 'actor_value_loss': value_term.mean(),
                 'actor_cost_loss': cost_term.mean(),
                 'entropy': -log_probs.mean(),
-                'alpha': alpha.mean(),
             }
 
         grads, actor_info = jax.grad(actor_loss_fn,
@@ -386,7 +385,8 @@ class FACLearner(Agent):
                 lambda_reqularization = agent.lambda_regularization/(agent.lambda_regularization+lambda_val.mean())
             else:
                 lambda_reqularization = 1
-            y -= agent.discount * batch['masks'] * alpha * lambda_reqularization * next_log_probs
+            target_backup = - agent.discount * batch['masks'] * alpha * lambda_reqularization * next_log_probs
+            y += target_backup
 
         key3, rng = jax.random.split(rng)
 
@@ -401,6 +401,7 @@ class FACLearner(Agent):
             return critic_loss, {'critic_loss': critic_loss,
                                  'q': qs.mean(),
                                  'batch_reward': batch['rewards'].mean(),
+                                 'target_backup': target_backup.mean(),
                                  'critic_target': y.mean()}
 
         grads, info = jax.grad(critic_loss_fn,
