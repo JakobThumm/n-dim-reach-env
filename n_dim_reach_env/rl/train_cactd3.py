@@ -1,7 +1,7 @@
-"""This file describes the training functionality for DroQ with HER.
+"""This file describes the training functionality for CACTD3 in a constrained RL environment.
 
 Author: Jakob Thumm
-Date: 14.10.2022
+Date: 03.11.2022
 """
 import os
 import pickle
@@ -20,21 +20,21 @@ from flax.training import checkpoints
 
 from gym import spaces
 
-from n_dim_reach_env.rl.util.action_scaling import scale_action, unscale_action
-from n_dim_reach_env.rl.util.logging import Logger
 from n_dim_reach_env.rl.util.dict_conversion import\
     single_obs, goal_dist, goal_lidar, get_observation_space, has_dict_obs
+from n_dim_reach_env.rl.util.action_scaling import scale_action, unscale_action
+from n_dim_reach_env.rl.util.logging import Logger
 
-from n_dim_reach_env.rl.agents import SACLearner
+from n_dim_reach_env.rl.agents import CACTD3Learner
 from n_dim_reach_env.rl.data import ReplayBuffer
 from n_dim_reach_env.rl.data.her_replay_buffer import HEReplayBuffer
-from n_dim_reach_env.rl.data.single_demo_booster import SingleDemoBooster
 from n_dim_reach_env.rl.evaluation import evaluate  # noqa: F401
 
 
-def train_droq(
+def train_fac(
     env: gym.Env,
     eval_env: gym.Env,
+    delta: float = 10,
     seed: int = 0,
     agent_kwargs: dict = {},
     max_ep_len: int = 1000,
@@ -45,11 +45,9 @@ def train_droq(
     n_her_samples: int = 4,
     goal_selection_strategy: str = "future",
     handle_timeout_termination: bool = True,
-    boost_single_demo: bool = False,
-    boost_single_demo_kwargs: dict = {},
-    pre_play_steps: int = 0,
-    pre_play_rate: float = 0.0,
     utd_ratio: float = 1,
+    update_lambda_every: int = 4,
+    update_cost_target_every: int = 1,
     batch_size: int = 256,
     buffer_size: int = 1000000,
     eval_interval: int = 10000,
@@ -67,11 +65,12 @@ def train_droq(
     wandb_monitor_gym: bool = True,
     wandb_save_code: bool = False
 ):
-    """Train a DroQ agent on a given environment.
+    r"""Train a DroQ agent on a given environment.
 
     Args:
         env (gym.Env): The environment to train on.
         eval_env (gym.Env): The environment to evaluate on.
+        delta (float, optional): The cost ratio threshold for constraint violation. Qc(s,a) \leq \delta. Defaults to 10
         seed (int, optional): The seed to use for the environment and the agent. Defaults to 0.
         agent_kwargs (dict, optional): Additional keyword arguments to pass to the agent. Defaults to {}.
         max_ep_len (int, optional): The maximum episode length. Defaults to 1000.
@@ -82,11 +81,9 @@ def train_droq(
         n_her_samples (int, optional): The number of HER samples to generate per transition. Defaults to 4.
         goal_selection_strategy (str, optional): The goal selection strategy to use for HER. Defaults to "future".
         handle_timeout_termination (bool, optional): Whether to handle the timeout termination signal. Defaults to True.
-        boost_single_demo (bool, optional): Whether to use a single demonstration to boost training. Defaults to False.
-        boost_single_demo_kwargs (dict, optional): Additional keyword arguments to pass to the single demonstration
-            booster. Defaults to {}.
         utd_ratio (float, optional): The update to data ratio. Defaults to 1.
         batch_size (int, optional): The batch size to use for training. Defaults to 256.
+        update_lambda_every (int, optional): The number of steps between updates of the lambda parameters. Defaults to 4
         buffer_size (int, optional): The size of the replay buffer. Defaults to 1000000.
         eval_interval (int, optional): The number of steps between evaluations. Defaults to 10000.
         eval_episodes (int, optional): The number of episodes to evaluate for. Defaults to 5.
@@ -124,11 +121,6 @@ def train_droq(
         observation_space = get_observation_space(env)
     dict_obs = has_dict_obs(env)
 
-    if pre_play_steps > 0 and not boost_single_demo:
-        print("WARNING: Pre-play steps can only be used together with boosting a single demonstration.\
-              Disabling pre-play.")
-        pre_play_steps = 0
-
     if load_from_folder is None:
         if use_wandb:
             run = wandb.init(
@@ -141,10 +133,11 @@ def train_droq(
         else:
             run = struct
             run.id = int(np.random.rand(1) * 100000)
-        agent = SACLearner.create(
+        agent = CACTD3Learner.create(
             seed=seed,
             observation_space=observation_space,
             action_space=env.action_space,
+            delta=delta,
             **agent_kwargs
         )
 
@@ -161,6 +154,8 @@ def train_droq(
                 observation_space=env.observation_space,
                 action_space=env.action_space,
                 capacity=buffer_size,
+                use_cost=True,
+                dict_to_obs_fn=dict_to_obs_fn,
                 achieved_goal_space=env.observation_space["achieved_goal"],
                 desired_goal_space=env.observation_space["desired_goal"],
                 next_observation_space=env.observation_space,
@@ -170,21 +165,12 @@ def train_droq(
                 handle_timeout_termination=handle_timeout_termination)
         else:
             replay_buffer = ReplayBuffer(
-                observation_space,
-                env.action_space,
-                buffer_size
-            )
-        replay_buffer.seed(seed)
-        # Single demonstration booster
-        if boost_single_demo:
-            replay_buffer = SingleDemoBooster(
-                env=env,
-                replay_buffer=replay_buffer,
                 observation_space=observation_space,
                 action_space=env.action_space,
-                single_demo=None,
-                **boost_single_demo_kwargs
+                capacity=buffer_size,
+                use_cost=True
             )
+        replay_buffer.seed(seed)
     else:
         chkpt_dir = load_from_folder + 'saved/checkpoints/'
         buffer_dir = load_from_folder + 'saved/buffers/'
@@ -207,10 +193,11 @@ def train_droq(
         else:
             run = struct
             run.id = run_id
-        agent = SACLearner.create(
+        agent = CACTD3Learner.create(
             seed=seed,
             observation_space=observation_space,
             action_space=env.action_space,
+            delta=delta,
             **agent_kwargs
         )
         if load_checkpoint == -1:
@@ -227,21 +214,15 @@ def train_droq(
         deque_size=eval_episodes
     )
     observation, done = env.reset(), False
-
     logger = Logger(logging_keys=logging_keys)
+    last_lambda_log = {}
     eval_at_next_done = False
-    max_pre_play_actions = 0
-    pre_play_action_counter = 0
     for i in tqdm.tqdm(range(start_i, int(max_steps)),
                        smoothing=0.1,
                        disable=not tqdm):
         # Start steps with random actions
         if i < start_steps:
             action = env.action_space.sample()
-        # Potential pre-play steps
-        elif i < start_steps + pre_play_steps and pre_play_action_counter <= max_pre_play_actions:
-            action = replay_buffer.get_artificial_action(pre_play_action_counter, observation["achieved_goal"])
-            pre_play_action_counter += 1
         # Normal agent actions
         else:
             if dict_obs:
@@ -249,12 +230,17 @@ def train_droq(
             else:
                 action_observation = observation
             action, agent = agent.sample_actions(action_observation)
+            assert not np.any(np.isnan(action)), f"NaN action. Check your agent. Observation: {action_observation}"
             # Agent outputs action in [-1, 1] but we want to step in [low, high]
             action = unscale_action(action,
                                     env.action_space.low,
                                     env.action_space.high,
                                     squash_output)
         next_observation, reward, done, info = env.step(action)
+        if "cost" not in info:
+            print("[WARNING] Cost not in info dict")
+            info["cost"] = 1
+            done = True
         # Logging
         logger.log(info=info, reward=reward)
 
@@ -282,7 +268,8 @@ def train_droq(
                                rewards=reward,
                                masks=mask,
                                dones=done,
-                               next_observations=next_observation),
+                               next_observations=next_observation,
+                               costs=info["cost"]),
                 infos=info,
                 env=env)
         else:
@@ -293,7 +280,8 @@ def train_droq(
                          rewards=reward,
                          masks=mask,
                          dones=done,
-                         next_observations=dict_to_obs_fn(next_observation)))
+                         next_observations=dict_to_obs_fn(next_observation),
+                         costs=info["cost"]))
             else:
                 replay_buffer.insert(
                     dict(observations=observation,
@@ -301,7 +289,8 @@ def train_droq(
                          rewards=reward,
                          masks=mask,
                          dones=done,
-                         next_observations=next_observation))
+                         next_observations=next_observation,
+                         costs=info["cost"]))
         observation = next_observation
         if (i+1) % eval_interval == 0:
             eval_at_next_done = True
@@ -315,11 +304,20 @@ def train_droq(
                 batch = replay_buffer.sample(
                     batch_size*utd_ratio
                 )
-            agent, update_info = agent.update(batch, utd_ratio)
+            update_lambda = (i % update_lambda_every == 0)
+            update_cost_target = (i % update_cost_target_every == 0)
+            agent, update_info = agent.update(
+                batch,
+                utd_ratio,
+                update_lambda=update_lambda,
+                update_cost_target=update_cost_target
+            )
+            if "lambda_loss" in update_info:
+                last_lambda_log = update_info
             if use_wandb and i % train_logging_interval == 0:
-                for k, v in update_info.items():
+                for k, v in last_lambda_log.items():
                     if not k == "length":
-                        wandb.log({f'DroQ/{k}': v}, step=i)
+                        wandb.log({f'CACTD3/{k}': v}, step=i)
         if done:
             logging_info = logger.get_logging_info()
             if use_wandb:
@@ -328,8 +326,10 @@ def train_droq(
             print(logging_info)
             logger.reset()
             if eval_at_next_done:
+                cost_queue = []
                 for _ in range(eval_episodes):
                     observation, done = eval_env.reset(), False
+                    cost_sum = 0
                     while not done:
                         if dict_obs:
                             action_observation = dict_to_obs_fn(observation)
@@ -340,10 +340,14 @@ def train_droq(
                                                 eval_env.action_space.low,
                                                 eval_env.action_space.high,
                                                 squash_output)
-                        observation, _, done, _ = eval_env.step(action)
+                        observation, _, done, infos = eval_env.step(action)
+                        if "cost" in infos:
+                            cost_sum += infos["cost"]
+                    cost_queue.append(cost_sum)
                 eval_info = {
                     'return': np.mean(eval_env.return_queue),
-                    'length': np.mean(eval_env.length_queue)
+                    'length': np.mean(eval_env.length_queue),
+                    'cum_ep_cost': np.mean(cost_queue)
                 }
                 print("Eval info:", eval_info)
                 if eval_callback is not None:
@@ -354,7 +358,7 @@ def train_droq(
                 eval_at_next_done = False
                 checkpoints.save_checkpoint(chkpt_dir,
                                             agent,
-                                            step=i + 1,
+                                            step=i+1,
                                             keep=20,
                                             overwrite=True)
                 try:
@@ -368,15 +372,6 @@ def train_droq(
                 ) as f:
                     pickle.dump(replay_buffer, f)
             observation, done = env.reset(), False
-            if i >= start_steps and i < start_steps + pre_play_steps:
-                r = np.random.rand()
-                if r < pre_play_rate:
-                    n_pre_play_actions = replay_buffer.initialize_artificial_trajectory(
-                        p_gen_start=observation["achieved_goal"],
-                        p_gen_goal=observation["desired_goal"]
-                    )
-                    max_pre_play_actions = np.random.randint(low=1, high=n_pre_play_actions)
-                    pre_play_action_counter = 0
 
     if use_wandb:
         run.finish()

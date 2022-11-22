@@ -2,4 +2,5 @@ id: Safexp-PointGoal1-v0
 render_mode: null
 seed: 42
 max_ep_len: 1000
-delta: 10.0
+delta: 1000
+min_step_reward: 0.0

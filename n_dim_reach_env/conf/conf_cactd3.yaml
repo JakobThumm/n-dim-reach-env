@@ -1,0 +1,7 @@
+defaults:
+  - fac: cactd3
+  - env: point_goal
+  - train: train
+  - optimize: optimize
+
+verbose: true
