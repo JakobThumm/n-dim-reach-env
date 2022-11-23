@@ -343,8 +343,9 @@ def train_fac(
                     'cum_ep_cost': np.mean(cost_queue)
                 }
                 print("Eval info:", eval_info)
+                success = True
                 if eval_callback is not None:
-                    eval_callback(eval_info["return"])
+                    success = eval_callback(eval_info["return"])
                 if use_wandb:
                     for k, v in eval_info.items():
                         wandb.log({f'evaluation/{k}': v}, step=i)
@@ -364,6 +365,9 @@ def train_fac(
                     os.path.join(buffer_dir, f'buffer_{i+1}'), 'wb'
                 ) as f:
                     pickle.dump(replay_buffer, f)
+                if not success:
+                    print("Stopping training due to eval callback.")
+                    break
             observation, done = env.reset(), False
 
     if use_wandb:

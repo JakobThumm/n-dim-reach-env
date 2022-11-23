@@ -5,6 +5,9 @@ Date: 14.10.2022
 """
 from typing import Any, Dict, List
 import optuna
+import os
+import joblib
+from datetime import datetime
 from optuna.pruners import ThresholdPruner, SuccessiveHalvingPruner, MedianPruner
 from optuna.samplers import RandomSampler, TPESampler
 from optuna.integration.skopt import SkoptSampler
@@ -18,8 +21,6 @@ from n_dim_reach_env.conf.config_droq import EnvConfig
 def optimize_hyperparameters(
     env_fn: callable,
     env_args: EnvConfig,
-    obs_space_fn: callable,
-    has_dict_obs_fn: callable,
     learn_args: Dict[str, Any],
     tuning_params: List[str],
     n_trials: int = 10,
@@ -39,9 +40,7 @@ def optimize_hyperparameters(
     """Optimize hyperparameters using Optuna.
 
     :param env_fn: (func) function that is used to instantiate the env
-    :param env_args: (EnvConfig) Arguments for env fun
-    :param obs_space_fn: (func) function that is used to instantiate the observation space
-    :param has_dict_obs_fn: (func) function that outputs whether the env has a dict obs space
+    :param env_args: (EnvConfig) Arguments for env function
     :param learn_args: (dict) Arguments for training fn
     :param tuning_params: (list) List of hyperparams to tune
     :param n_trials: (int) maximum number of trials for finding the best hyperparams
@@ -62,6 +61,8 @@ def optimize_hyperparameters(
     # TODO: eval each hyperparams several times to account for noisy evaluation
     # TODO: take into account the normalization (also for the test env -> sync obs_rms)
     eval_freq = int(n_timesteps / n_evaluations)
+    dir = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    study_dir = os.getcwd() + f'/optuna/studies/{dir}'
 
     # n_warmup_steps: Disable pruner until the trial reaches the given number of step.
     if sampler_method == 'random':
@@ -86,7 +87,7 @@ def optimize_hyperparameters(
     elif pruner_method == 'threshold':
         pruner = ThresholdPruner(
             upper=upper_threshold,
-            n_warmup_steps=n_warmup_steps)  
+            n_warmup_steps=n_warmup_steps)
     elif pruner_method == 'median':
         pruner = MedianPruner(n_startup_trials=n_startup_trials,
                               n_warmup_steps=n_warmup_steps)
@@ -116,15 +117,11 @@ def optimize_hyperparameters(
         # kwargs.update(algo_sampler(trial))
         env = env_fn(env_args)
         eval_env = env_fn(env_args)
-        observation_space = obs_space_fn(env)
-        dict_obs = has_dict_obs_fn(env)
         # Account for parallel envs
         try:
             train_droq(
                 env=env,
                 eval_env=eval_env,
-                observation_space=observation_space,
-                dict_obs=dict_obs,
                 **kwargs
             )
             # Free memory
@@ -140,7 +137,7 @@ def optimize_hyperparameters(
         is_pruned = eval_callback.is_pruned
         cost = -1 * eval_callback.last_mean_reward
 
-        del env, eval_env, observation_space, dict_obs
+        del env, eval_env
 
         if is_pruned:
             raise optuna.exceptions.TrialPruned()
@@ -164,7 +161,8 @@ def optimize_hyperparameters(
     print('Params: ')
     for key, value in trial.params.items():
         print('    {}: {}'.format(key, value))
-
+    os.makedirs(study_dir, exist_ok=True)
+    joblib.dump(study, study_dir + "/study.pkl")
     return study
 
 
@@ -183,45 +181,40 @@ def sample_droq_params(
     """
     hyperparams = dict()
     if 'actor_lr' in tuning_params:
-        actor_lr = trial.suggest_loguniform('actor_lr', 1e-6, 0.01)
+        actor_lr = trial.suggest_float('actor_lr', 1e-6, 0.01)
         hyperparams['actor_lr'] = actor_lr
     if 'critic_lr' in tuning_params:
-        critic_lr = trial.suggest_loguniform('critic_lr', 1e-6, 0.01)
+        critic_lr = trial.suggest_float('critic_lr', 1e-6, 0.01)
         hyperparams['critic_lr'] = critic_lr
     if 'temp_lr' in tuning_params:
-        temp_lr = trial.suggest_loguniform('temp_lr', 1e-6, 0.01)
+        temp_lr = trial.suggest_float('temp_lr', 1e-6, 0.01)
         hyperparams['temp_lr'] = temp_lr
     if 'hidden_dims' in tuning_params:
-        hidden_dims = trial.suggest_categorical('hidden_dims', [
-            [64, 64],
-            [128, 128],
-            [256, 256],
-            [64, 64, 64],
-            [128, 128, 128],
-            [256, 256, 256],
-        ])
-        hyperparams['hidden_dims'] = hidden_dims
+        net_width = trial.suggest_categorical('net_width', [64, 128, 256])
+        net_depth = trial.suggest_categorical('net_depth', [2, 3])
+        hyperparams['hidden_dims'] = [net_width] * net_depth
     if 'discount' in tuning_params:
         discount = trial.suggest_categorical('discount', [0.95, 0.97, 0.98, 0.99, 0.995, 0.999])
         hyperparams['discount'] = discount
     if 'tau' in tuning_params:
-        tau = trial.suggest_categorical('tau', [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.2]) 
+        tau = trial.suggest_categorical('tau', [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.2])
         hyperparams['tau'] = tau
     if 'num_qs' in tuning_params:
         num_qs = trial.suggest_categorical('num_qs', [1, 2, 3]) 
         hyperparams['num_qs'] = num_qs
     # num_min_qs: null
     if 'critic_dropout_rate' in tuning_params:
-        critic_dropout_rate = trial.suggest_loguniform('critic_dropout_rate', 1e-4, 0.1)
+        critic_dropout_rate = trial.suggest_float('critic_dropout_rate', 1e-4, 0.1)
         hyperparams['critic_dropout_rate'] = critic_dropout_rate
     if 'critic_layer_norm' in tuning_params:
         critic_layer_norm = trial.suggest_categorical('critic_layer_norm', [True, False])
         hyperparams['critic_layer_norm'] = critic_layer_norm
     if 'target_entropy' in tuning_params:
-        target_entropy = trial.suggest_categorical('target_entropy', [-0.1, -0.5, -1, -2, -3, -4, -5, -6, -7, -8, -9, -10])
+        target_entropy = trial.suggest_categorical('target_entropy',
+                                                   [-0.1, -0.5, -1, -2, -3, -4, -5, -6, -7, -8, -9, -10])
         hyperparams['target_entropy'] = target_entropy
     if 'init_temperature' in tuning_params:
-        init_temperature = trial.suggest_loguniform('init_temperature', 1e-4, 0.5)
+        init_temperature = trial.suggest_float('init_temperature', 1e-4, 0.5)
         hyperparams['init_temperature'] = init_temperature
     if 'sampled_backup' in tuning_params:
         sampled_backup = trial.suggest_categorical('sampled_backup', [True, False])
@@ -270,3 +263,13 @@ def prior_droq_params(tuning_params: List[str]) -> Dict[str, Any]:
         "batch_size": 128,
         "utd_ratio": 10,
     }
+
+
+def plot_importance_hyperparams(path: str):
+    """Plot the importance of the hyperparameters using Optuna and SB3zoo."""
+    import optuna
+    study = joblib.load(os.getcwd() + f'/optuna/studies/{path}/study.pkl')
+    fig = optuna.visualization.plot_param_importances(
+        study, target=lambda t: t.value, target_name="value"
+    )
+    fig.show()

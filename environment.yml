@@ -19,6 +19,7 @@ dependencies:
   - mypy=0.971
   - pytest=7.1.1
   - optuna=3.0.3
+  - scikit-optimize=0.9.0
   - pip:
     # works for regular pip packages
     - bvh==0.3

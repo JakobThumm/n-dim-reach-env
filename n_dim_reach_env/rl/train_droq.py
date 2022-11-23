@@ -346,8 +346,9 @@ def train_droq(
                     'length': np.mean(eval_env.length_queue)
                 }
                 print("Eval info:", eval_info)
+                success = True
                 if eval_callback is not None:
-                    eval_callback(eval_info["return"])
+                    success = eval_callback(eval_info["return"])
                 if use_wandb:
                     for k, v in eval_info.items():
                         wandb.log({f'evaluation/{k}': v}, step=i)
@@ -367,6 +368,9 @@ def train_droq(
                     os.path.join(buffer_dir, f'buffer_{i+1}'), 'wb'
                 ) as f:
                     pickle.dump(replay_buffer, f)
+                if not success:
+                    print("Stopping training due to eval callback.")
+                    break
             observation, done = env.reset(), False
             if i >= start_steps and i < start_steps + pre_play_steps:
                 r = np.random.rand()
