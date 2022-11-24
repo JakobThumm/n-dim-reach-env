@@ -100,11 +100,11 @@ def main(cfg: SauteTrainingConfig):
     ##### EVAL #####
     
     observation, done = env.reset(), False
-    cost_sum = 0
     np.set_printoptions(precision=2)
     for i in range(10):
         observation, done = env.reset(), False
         env.render("human")
+        cost_sum = 0
         while not done:
             if dict_obs:
                 action_observation = dict_to_obs_fn(observation)
@@ -117,13 +117,17 @@ def main(cfg: SauteTrainingConfig):
                                     cfg.droq.squash_output)
             observation, reward, done, infos = env.step(action)
             env.render("human")
+            if dict_obs:
+                cum_cost = observation["observation"][-1]
+            else:
+                cum_cost = observation[-1]
             print("Cost: {:.0f}, observed cum cost: {:.0f}".format(#, action: {}, a: {}, v: {}, g: {}, m: {}, max hazard: {:.3f}".format(
                 infos['cost'],
-                action_observation[-1]
+                cum_cost
             ))
             if "cost" in infos:
                 cost_sum += infos["cost"]
-        print("Cost sum: {:.0f}".format(cost_sum))
+            print("Cost sum: {:.0f}".format(cost_sum))
 
 
 if __name__ == "__main__":

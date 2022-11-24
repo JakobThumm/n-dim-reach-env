@@ -161,6 +161,7 @@ def train_droq(
                 observation_space=env.observation_space,
                 action_space=env.action_space,
                 capacity=buffer_size,
+                dict_to_obs_fn=dict_to_obs_fn,
                 achieved_goal_space=env.observation_space["achieved_goal"],
                 desired_goal_space=env.observation_space["desired_goal"],
                 next_observation_space=env.observation_space,

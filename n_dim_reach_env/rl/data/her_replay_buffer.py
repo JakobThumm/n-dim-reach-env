@@ -237,6 +237,7 @@ class HEReplayBuffer(ReplayBuffer):
         her_indices = np.arange(0, k*episode_length)
         # get selected transitions
         buffer_indices = self.get_buffer_indices(episode_indices, transitions_indices)
+        buffer_indices = buffer_indices % self._capacity
         transitions = self.sample_non_frozen(batch_size=k*episode_length, indx=buffer_indices)
 
         # Convert info buffer to numpy array
@@ -423,6 +424,7 @@ class HEReplayBuffer(ReplayBuffer):
         else:
             raise ValueError(f"Strategy {self.goal_selection_strategy} for sampling goals not supported!")
         her_buffer_indices = self.get_buffer_indices(episode_indices[her_indices], her_transitions_indices)
+        her_buffer_indices = her_buffer_indices % self._capacity
         goals = self.sample_non_frozen(
             her_buffer_indices.shape[0],
             ["observations"],
