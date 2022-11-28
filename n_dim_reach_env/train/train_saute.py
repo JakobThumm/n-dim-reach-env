@@ -40,7 +40,7 @@ def create_env(env_args: EnvConfig) -> gym.Env:
     """
     env = gym.make(env_args.id)
     env = TimeLimit(env, env_args.max_ep_len)
-    env = SauteWrapper(env, env_args.delta, env_args.min_step_reward)
+    env = SauteWrapper(env, env_args.delta, env_args.min_step_reward, env_args.max_ep_len)
     return env
 
 

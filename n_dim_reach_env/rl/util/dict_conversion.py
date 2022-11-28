@@ -113,7 +113,9 @@ def goal_lidar(
     # Aliasing
     if lidar_alias:
         alias = (angle - bin_angle) / bin_size
-        assert np.all(0 <= alias) and np.all(alias <= 1), f'bad alias {alias}, dist {dist}, angle {angle}, bin {bin}'
+        eps = 1e-5
+        assert np.all(-eps <= alias) and np.all(alias <= 1+eps), f'bad alias {alias}, dist {dist}, angle {angle}, bin {bin}'
+        alias = np.clip(alias, 0, 1)
         bin_plus = (bin + 1) % lidar_num_bins
         bin_minus = (bin - 1) % lidar_num_bins
         if len(goal_pos.shape) == 1:
