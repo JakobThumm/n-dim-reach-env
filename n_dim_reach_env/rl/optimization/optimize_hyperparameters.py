@@ -106,7 +106,11 @@ def optimize_hyperparameters(
     def objective(trial):
         eval_callback = TrialEvalCallback(trial)
         kwargs = learn_args.copy()
-        kwargs['agent_kwargs'].update(sample_droq_params(trial, tuning_params))
+        agent_kwargs = sample_droq_params(trial, tuning_params)
+        if "utd_ratio" in agent_kwargs:
+            kwargs["utd_ratio"] = agent_kwargs["utd_ratio"]
+            agent_kwargs.pop("utd_ratio")
+        kwargs['agent_kwargs'].update(agent_kwargs)
         kwargs.update({'eval_callback': eval_callback._on_step,
                        'max_steps': n_timesteps,
                        'eval_interval': eval_freq,

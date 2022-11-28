@@ -4,8 +4,8 @@ eval_episodes: 10
 tqdm: true
 use_wandb: true
 wandb_project: constrained-her
-load_checkpoint: 200000
-load_from_folder: /home/jakob/Promotion/code/n-dim-reach-env/outputs/2022-11-24/09-01-04/
+load_checkpoint: -1
+load_from_folder: null #/home/jakob/Promotion/code/n-dim-reach-env/outputs/2022-11-24/09-01-04/
 train_logging_interval: 50
 logging_keys:
   reward: ["cum", "max"]

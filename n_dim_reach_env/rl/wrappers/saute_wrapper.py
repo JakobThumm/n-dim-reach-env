@@ -15,19 +15,21 @@ class SauteWrapper(gym.Wrapper):
     def __init__(self,
                  env: gym.Env,
                  cost_threshold: float = 1.0,
-                 min_step_reward: float = -1.0):
+                 min_step_reward: float = -1.0,
+                 mode: str = "threshold"):
         """Initialize the wrapper.
 
         Args:
             env (gym.Env): Environment to wrap.
             cost_threshold (float): Threshold for the cost.
             min_step_reward (float): Minimum possible reward for a step.
+            mode (str): Mode for the reward adaptation, can be "exponential" or "threshold".
         """
         super().__init__(env)
         self.cost_threshold = cost_threshold
         self.cumulative_cost = 0.0
         self.min_step_reward = min_step_reward
-        self.mode = "standard"
+        self.mode = mode
         if isinstance(self.env.observation_space, gym.spaces.Dict):
             assert "observation" in self.env.observation_space.spaces
             self._observation_space = copy(self.env.observation_space)
