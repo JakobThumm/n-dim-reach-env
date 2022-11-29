@@ -283,7 +283,7 @@ def sample_td3_params(
         hyperparams['feature_extractor_dims'] = [feat_net_width] * feat_net_depth
     if 'network_dims' in tuning_params:
         net_width = trial.suggest_categorical('network_width', [64, 128, 256])
-        net_depth = trial.suggest_categorical('network_depth', [1, 2])
+        net_depth = trial.suggest_categorical('network_depth', [2, 3])
         hyperparams['network_dims'] = [net_width] * net_depth
     if 'discount' in tuning_params:
         discount = trial.suggest_categorical('discount', [0.95, 0.97, 0.98, 0.99, 0.995, 0.999])
@@ -354,13 +354,13 @@ def prior_td3_params(tuning_params: List[str]) -> Dict[str, Any]:
         "critic_lr": 1e-4,
         "feature_extractor_lr": 3e-4,
         "temp_lr": 3e-4,
-        "feature_extractor_dims": [256, 256],
+        "feature_extractor_dims": None,
         "network_dims": [64, 64],
         "discount": 0.99,
-        "tau": 0.0005,
+        "tau": 0.005,
         "target_entropy": -1,
         "init_temperature": 1,
-        "sampled_backup": True,
+        "sampled_backup": False,
         "buffer_size": 1000000,
         "n_her_samples": 4,
         "goal_selection_strategy": "future",

@@ -183,8 +183,10 @@ class TD3Learner(Agent):
 
         Loss = \alpha * log(\pi(a|s)) - Q_1(s, \pi(a|s))
         """
-        rng, critic_1_key, feature_extractor_key, dist_key = jax.random.split(agent.rng, 4)
+        rng, critic_1_key, dist_key = jax.random.split(agent.rng, 3)
         if agent.use_feature_extractor:
+            rng, feature_extractor_key, predict_feature_extractor_key = jax.random.split(rng, 3)
+
             def feature_extractor_loss_fn(feature_extractor_params) -> jnp.ndarray:
                 # This action
                 features = agent.feature_extractor.apply_fn({'params': feature_extractor_params},
@@ -207,12 +209,15 @@ class TD3Learner(Agent):
             agent = agent.replace(
                 feature_extractor=feature_extractor
             )
-
-        def actor_loss_fn(actor_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
             features = agent.feature_extractor.apply_fn({'params': agent.feature_extractor.params},
                                                         batch['observations'],
                                                         True,
-                                                        rngs={'dropout': feature_extractor_key})
+                                                        rngs={'dropout': predict_feature_extractor_key})
+        else:
+            features = batch['observations']
+
+        def actor_loss_fn(actor_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
+            """Actor loss."""
             dist = agent.actor.apply_fn({'params': actor_params}, features)
             actions = dist.sample(seed=dist_key)
             log_probs = dist.log_prob(actions)
@@ -278,14 +283,22 @@ class TD3Learner(Agent):
         Loss = 0.5 * (Q(s, a) - y)^2
         """
         if agent.sampled_backup:
-            rng, critic_1_key, critic_2_key, feature_extractor_key, dist_key = jax.random.split(agent.rng, 5)
+            rng, critic_1_key, critic_2_key, dist_key = jax.random.split(agent.rng, 4)
         else:
-            rng, critic_1_key, critic_2_key, feature_extractor_key = jax.random.split(agent.rng, 4)
-
-        next_features = agent.feature_extractor.apply_fn({'params': agent.feature_extractor.params},
-                                                         batch['next_observations'],
-                                                         True,
-                                                         rngs={'dropout': feature_extractor_key})
+            rng, critic_1_key, critic_2_key = jax.random.split(agent.rng, 3)
+        if agent.use_feature_extractor:
+            rng, feature_extractor_key, next_feature_extractor_key = jax.random.split(rng, 3)
+            features = agent.feature_extractor.apply_fn({'params': agent.feature_extractor.params},
+                                                        batch['observations'],
+                                                        True,
+                                                        rngs={'dropout': feature_extractor_key})
+            next_features = agent.feature_extractor.apply_fn({'params': agent.feature_extractor.params},
+                                                             batch['next_observations'],
+                                                             True,
+                                                             rngs={'dropout': next_feature_extractor_key})
+        else:
+            features = batch['observations']
+            next_features = batch['next_observations']
         next_dist = agent.actor.apply_fn({'params': agent.actor.params},
                                          next_features)
         if agent.sampled_backup:
@@ -315,10 +328,6 @@ class TD3Learner(Agent):
             critic_2_params
         ) -> Tuple[jnp.ndarray, Dict[str, float]]:
             # This action
-            features = agent.feature_extractor.apply_fn({'params': agent.feature_extractor.params},
-                                                        batch['observations'],
-                                                        True,
-                                                        rngs={'dropout': feature_extractor_key})
             q_1 = agent.critic_1.apply_fn({'params': critic_1_params},
                                           features,
                                           batch['actions'],
@@ -333,6 +342,7 @@ class TD3Learner(Agent):
             return critic_loss, {'critic_loss': critic_loss,
                                  'q_1': q_1.mean(),
                                  'q_2': q_2.mean(),
+                                 'target_q': y.mean(),
                                  'batch_reward': batch['rewards'].mean()}
 
         critic_grads, info = jax.grad(critic_loss_fn, has_aux=True)(

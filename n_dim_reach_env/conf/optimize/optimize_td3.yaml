@@ -4,7 +4,6 @@ tuning_params: [
   "critic_lr",
   "feature_extractor_lr",
   "temp_lr",
-  "feature_extractor_dims",
   "network_dims",
   "discount",
   "tau",

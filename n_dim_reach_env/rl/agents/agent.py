@@ -32,7 +32,7 @@ class Agent(struct.PyTreeNode):
 
     def eval_actions(self, observations: np.ndarray) -> np.ndarray:
         """Sample actions from the policy without noise."""
-        if hasattr(self, "feature_extractor"):
+        if hasattr(self, "use_feature_extractor") and self.use_feature_extractor:
             features = self.feature_extractor.apply_fn({'params': self.feature_extractor.params}, observations)
         else:
             features = observations
@@ -41,7 +41,7 @@ class Agent(struct.PyTreeNode):
 
     def sample_actions(self, observations: np.ndarray) -> np.ndarray:
         """Samples actions from the policy with noise."""
-        if hasattr(self, "feature_extractor"):
+        if hasattr(self, "use_feature_extractor") and self.use_feature_extractor:
             features = self.feature_extractor.apply_fn({'params': self.feature_extractor.params}, observations)
         else:
             features = observations
