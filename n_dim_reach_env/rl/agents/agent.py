@@ -1,7 +1,8 @@
+"""This file describes a base agent in JAX+FLAX."""
+
 from functools import partial
 
 import jax
-import jax.numpy as jnp
 import numpy as np
 from flax import struct
 from flax.training.train_state import TrainState
@@ -24,15 +25,25 @@ def _eval_actions(apply_fn, params, observations: np.ndarray) -> np.ndarray:
 
 
 class Agent(struct.PyTreeNode):
+    """A base class for agents."""
+
     actor: TrainState
     rng: PRNGKey
 
     def eval_actions(self, observations: np.ndarray) -> np.ndarray:
-        actions = _eval_actions(self.actor.apply_fn, self.actor.params,
-                                observations)
+        """Sample actions from the policy without noise."""
+        if hasattr(self, "feature_extractor"):
+            features = self.feature_extractor.apply_fn({'params': self.feature_extractor.params}, observations)
+        else:
+            features = observations
+        actions = _eval_actions(self.actor.apply_fn, self.actor.params, features)
         return np.asarray(actions)
 
     def sample_actions(self, observations: np.ndarray) -> np.ndarray:
-        actions, new_rng = _sample_actions(self.rng, self.actor.apply_fn,
-                                           self.actor.params, observations)
+        """Samples actions from the policy with noise."""
+        if hasattr(self, "feature_extractor"):
+            features = self.feature_extractor.apply_fn({'params': self.feature_extractor.params}, observations)
+        else:
+            features = observations
+        actions, new_rng = _sample_actions(self.rng, self.actor.apply_fn, self.actor.params, features)
         return np.asarray(actions), self.replace(rng=new_rng)
