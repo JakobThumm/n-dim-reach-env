@@ -2,7 +2,7 @@ actor_lr: 0.004
 critic_lr: 3e-5
 feature_extractor_lr: 3e-4
 temp_lr: 3e-4
-feature_extractor_dims: [256, 256]
+feature_extractor_dims: null
 network_dims: [64, 64]
 discount: 0.99
 tau: 0.0005
