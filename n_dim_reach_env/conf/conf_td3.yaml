@@ -1,0 +1,7 @@
+defaults:
+  - td3: td3
+  - env: point_goal
+  - train: train
+  - optimize: optimize_td3
+
+verbose: true

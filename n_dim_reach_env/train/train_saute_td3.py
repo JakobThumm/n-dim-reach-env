@@ -15,68 +15,49 @@ import gym  # noqa: F401
 import hydra
 from hydra.core.config_store import ConfigStore
 
-from gym.wrappers import TimeLimit
-
 import safety_gym  # noqa: F401
 from n_dim_reach_env.rl.optimization.optimize_hyperparameters import optimize_hyperparameters  # noqa: F401
 # from n_dim_reach_env.wrappers.speed_action_wrapper import SpeedActionWrapper
-from n_dim_reach_env.conf.config_saute import SauteTrainingConfig, EnvConfig
+from n_dim_reach_env.conf.config_td3 import TD3TrainingConfig
 
 from n_dim_reach_env.rl.train_ac import train_ac
-from n_dim_reach_env.rl.wrappers.saute_wrapper import SauteWrapper
+from n_dim_reach_env.train.train_saute_droq import create_env
 
 cs = ConfigStore.instance()
-cs.store(name="saute_config", node=SauteTrainingConfig)
+cs.store(name="td3_config", node=TD3TrainingConfig)
 
 
-def create_env(env_args: EnvConfig) -> gym.Env:
-    """Create the environment.
-
-    Args:
-        env_args (EnvConfig): Environment arguments.
-
-    Returns:
-        gym.Env: Environment.
-    """
-    env = gym.make(env_args.id)
-    env = TimeLimit(env, env_args.max_ep_len)
-    env = SauteWrapper(env, env_args.delta, env_args.min_step_reward, env_args.max_ep_len)
-    return env
-
-
-@hydra.main(config_path="../conf", config_name="conf_saute")
-def main(cfg: SauteTrainingConfig):
-    """Train a FAC agent on the safety gym environment."""
+@hydra.main(config_path="../conf", config_name="conf_td3")
+def main(cfg: TD3TrainingConfig):
+    """Train a TD3 agent on the safety gym environment with Saute wrapper and HER."""
     print(cfg)
     agent_kwargs = {
-        "actor_lr": cfg.droq.actor_lr,
-        "critic_lr": cfg.droq.critic_lr,
-        "temp_lr": cfg.droq.temp_lr,
-        "hidden_dims": cfg.droq.hidden_dims,
-        "discount": cfg.droq.discount,
-        "tau": cfg.droq.tau,
-        "num_qs": cfg.droq.num_qs,
-        "num_min_qs": cfg.droq.num_min_qs,
-        "critic_dropout_rate": cfg.droq.critic_dropout_rate,
-        "critic_layer_norm": cfg.droq.critic_layer_norm,
-        "target_entropy": cfg.droq.target_entropy,
-        "init_temperature": cfg.droq.init_temperature,
-        "sampled_backup": cfg.droq.sampled_backup
+        "actor_lr": cfg.td3.actor_lr,
+        "critic_lr": cfg.td3.critic_lr,
+        "feature_extractor_lr": cfg.td3.feature_extractor_lr,
+        "temp_lr": cfg.td3.temp_lr,
+        "feature_extractor_dims": cfg.td3.feature_extractor_dims,
+        "network_dims": cfg.td3.network_dims,
+        "discount": cfg.td3.discount,
+        "tau": cfg.td3.tau,
+        "target_entropy": cfg.td3.target_entropy,
+        "init_temperature": cfg.td3.init_temperature,
+        "sampled_backup": cfg.td3.sampled_backup
     }
     learn_args = {
         "seed": cfg.env.seed,
         "agent_kwargs": agent_kwargs,
         "max_ep_len": cfg.env.max_ep_len,
         "max_steps": cfg.train.max_steps,
-        "start_steps": cfg.droq.start_steps,
-        "squash_output": cfg.droq.squash_output,
-        "use_her": cfg.droq.use_her,
-        "n_her_samples": cfg.droq.n_her_samples,
-        "goal_selection_strategy": cfg.droq.goal_selection_strategy,
-        "handle_timeout_termination": cfg.droq.handle_timeout_termination,
-        "utd_ratio": cfg.droq.utd_ratio,
-        "batch_size": cfg.droq.batch_size,
-        "buffer_size": cfg.droq.buffer_size,
+        "start_steps": cfg.td3.start_steps,
+        "squash_output": cfg.td3.squash_output,
+        "use_her": cfg.td3.use_her,
+        "n_her_samples": cfg.td3.n_her_samples,
+        "goal_selection_strategy": cfg.td3.goal_selection_strategy,
+        "handle_timeout_termination": cfg.td3.handle_timeout_termination,
+        "utd_ratio": cfg.td3.utd_ratio,
+        "batch_size": cfg.td3.batch_size,
+        "buffer_size": cfg.td3.buffer_size,
         "eval_interval": cfg.train.eval_interval,
         "eval_episodes": cfg.train.eval_episodes,
         "load_checkpoint": cfg.train.load_checkpoint,

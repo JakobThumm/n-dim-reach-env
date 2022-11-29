@@ -46,7 +46,7 @@ def create_env(env_args: EnvConfig) -> gym.Env:
 
 @hydra.main(config_path="../conf", config_name="conf_saute")
 def main(cfg: SauteTrainingConfig):
-    """Train a FAC agent on the safety gym environment."""
+    """Train a DroQ agent on the safety gym environment with Saute wrapper and HER."""
     print(cfg)
     agent_kwargs = {
         "actor_lr": cfg.droq.actor_lr,
