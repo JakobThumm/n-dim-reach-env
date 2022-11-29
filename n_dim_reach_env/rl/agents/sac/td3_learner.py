@@ -107,7 +107,7 @@ class TD3Learner(Agent):
         feature_extractor = TrainState.create(apply_fn=feature_extractor_def.apply,
                                               params=feature_extractor_params,
                                               tx=optax.adam(learning_rate=feature_extractor_lr))
-        features = feature_extractor.apply(feature_extractor_params, observations)
+        features = feature_extractor.apply_fn({'params': feature_extractor_params}, observations)
         # Actor
         actor_base_cls = partial(MLP,
                                  hidden_dims=network_dims,
