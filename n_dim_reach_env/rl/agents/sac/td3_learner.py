@@ -177,8 +177,26 @@ class TD3Learner(Agent):
         """
         rng, critic_1_key, feature_extractor_key, dist_key = jax.random.split(agent.rng, 4)
 
-        def actor_loss_fn(actor_params, feature_extractor_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
+        def feature_extractor_loss_fn(feature_extractor_params) -> jnp.ndarray:
+            # This action
             features = agent.feature_extractor.apply_fn({'params': feature_extractor_params},
+                                                        batch['observations'],
+                                                        True,
+                                                        rngs={'dropout': feature_extractor_key})
+            dist = agent.actor.apply_fn({'params': agent.actor.params}, features)
+            actions = dist.sample(seed=dist_key)
+            log_probs = dist.log_prob(actions)
+            alpha = agent.temp.apply_fn({'params': agent.temp.params})
+            q_1 = agent.critic_1.apply_fn({'params': agent.critic_1.params},
+                                          features,
+                                          actions,
+                                          True,
+                                          rngs={'dropout': critic_1_key})
+            feat_loss = (alpha * log_probs - q_1).mean()
+            return feat_loss
+
+        def actor_loss_fn(actor_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
+            features = agent.feature_extractor.apply_fn({'params': agent.feature_extractor.params},
                                                         batch['observations'],
                                                         True,
                                                         rngs={'dropout': feature_extractor_key})
@@ -197,14 +215,17 @@ class TD3Learner(Agent):
                 'entropy': -log_probs.mean(),
             }
 
-        grads, actor_info = jax.grad(actor_loss_fn, has_aux=True)(
-            agent.actor.params, agent.feature_extractor.params)
+        feature_grads = jax.grad(feature_extractor_loss_fn)(agent.feature_extractor.params)
+        actor_grads, actor_info = jax.grad(actor_loss_fn, has_aux=True)(agent.actor.params)
 
-        actor = agent.actor.apply_gradients(grads=grads)
-        feature_extractor = agent.feature_extractor.apply_gradients(grads=grads)
+        actor = agent.actor.apply_gradients(grads=actor_grads)
+        feature_extractor = agent.feature_extractor.apply_gradients(grads=feature_grads)
 
-        agent = agent.replace(actor=actor, feature_extractor=feature_extractor, rng=rng)
-
+        agent = agent.replace(
+            actor=actor,
+            feature_extractor=feature_extractor,
+            rng=rng
+        )
         return agent, actor_info
 
     @staticmethod
@@ -252,43 +273,59 @@ class TD3Learner(Agent):
         else:
             rng, critic_1_key, critic_2_key, feature_extractor_key = jax.random.split(agent.rng, 4)
 
-        def critic_loss_fn(
-            critic_1_params,
-            critic_2_params,
-            feature_extractor_params
-        ) -> Tuple[jnp.ndarray, Dict[str, float]]:
-            next_features = agent.feature_extractor.apply_fn({'params': feature_extractor_params},
-                                                             batch['next_observations'],
-                                                             True,
-                                                             rngs={'dropout': feature_extractor_key})
-            next_dist = agent.actor.apply_fn({'params': agent.actor.params},
-                                             next_features)
-            if agent.sampled_backup:
-                next_actions = next_dist.sample(seed=dist_key)
-            else:
-                next_actions = next_dist.mode()
+        next_features = agent.feature_extractor.apply_fn({'params': agent.feature_extractor.params},
+                                                         batch['next_observations'],
+                                                         True,
+                                                         rngs={'dropout': feature_extractor_key})
+        next_dist = agent.actor.apply_fn({'params': agent.actor.params},
+                                         next_features)
+        if agent.sampled_backup:
+            next_actions = next_dist.sample(seed=dist_key)
+        else:
+            next_actions = next_dist.mode()
+        next_q_1 = agent.target_critic_1.apply_fn({'params': agent.target_critic_1.params},
+                                                  next_features,
+                                                  next_actions,
+                                                  True,
+                                                  rngs={'dropout': critic_1_key})
+        next_q_2 = agent.target_critic_2.apply_fn({'params': agent.target_critic_2.params},
+                                                  next_features,
+                                                  next_actions,
+                                                  True,
+                                                  rngs={'dropout': critic_2_key})
+        next_q = jnp.min(jnp.stack([next_q_1, next_q_2]), axis=0)
+        y = batch['rewards'] + agent.discount * batch['masks'] * next_q
+        if agent.sampled_backup:
+            next_log_probs = next_dist.log_prob(next_actions)
+            alpha = agent.temp.apply_fn({'params': agent.temp.params})
+            target_backup = - agent.discount * batch['masks'] * alpha * next_log_probs
+            y += target_backup
 
-            next_q_1 = agent.target_critic_1.apply_fn({'params': agent.target_critic_1.params},
-                                                      next_features,
-                                                      next_actions,
-                                                      True,
-                                                      rngs={'dropout': critic_1_key})
-            next_q_2 = agent.target_critic_2.apply_fn({'params': agent.target_critic_2.params},
-                                                      next_features,
-                                                      next_actions,
-                                                      True,
-                                                      rngs={'dropout': critic_2_key})
-            next_q = jnp.min(jnp.stack([next_q_1, next_q_2]), axis=0)
-
-            y = batch['rewards'] + agent.discount * batch['masks'] * next_q
-
-            if agent.sampled_backup:
-                next_log_probs = next_dist.log_prob(next_actions)
-                alpha = agent.temp.apply_fn({'params': agent.temp.params})
-                target_backup = - agent.discount * batch['masks'] * alpha * next_log_probs
-                y += target_backup
+        def feature_extractor_loss_fn(feature_extractor_params) -> jnp.ndarray:
             # This action
             features = agent.feature_extractor.apply_fn({'params': feature_extractor_params},
+                                                        batch['observations'],
+                                                        True,
+                                                        rngs={'dropout': feature_extractor_key})
+            q_1 = agent.critic_1.apply_fn({'params': agent.critic_1.params},
+                                          features,
+                                          batch['actions'],
+                                          True,
+                                          rngs={'dropout': critic_1_key})
+            q_2 = agent.critic_2.apply_fn({'params': agent.critic_2.params},
+                                          features,
+                                          batch['actions'],
+                                          True,
+                                          rngs={'dropout': critic_2_key})
+            feat_loss = (1/2 * ((y - q_1)**2 + (y - q_2)**2)).mean()
+            return feat_loss
+
+        def critic_loss_fn(
+            critic_1_params,
+            critic_2_params
+        ) -> Tuple[jnp.ndarray, Dict[str, float]]:
+            # This action
+            features = agent.feature_extractor.apply_fn({'params': agent.feature_extractor.params},
                                                         batch['observations'],
                                                         True,
                                                         rngs={'dropout': feature_extractor_key})
@@ -308,14 +345,14 @@ class TD3Learner(Agent):
                                  'q_2': q_2.mean(),
                                  'batch_reward': batch['rewards'].mean()}
 
-        grads, info = jax.grad(critic_loss_fn, has_aux=True)(
+        feature_grads = jax.grad(feature_extractor_loss_fn)(agent.feature_extractor.params)
+        critic_grads, info = jax.grad(critic_loss_fn, has_aux=True)(
             agent.critic_1.params,
             agent.critic_2.params,
-            agent.feature_extractor.params
         )
-        feature_extractor = agent.feature_extractor.apply_gradients(grads=grads)
-        critic_1 = agent.critic_1.apply_gradients(grads=grads)
-        critic_2 = agent.critic_2.apply_gradients(grads=grads)
+        feature_extractor = agent.feature_extractor.apply_gradients(grads=feature_grads)
+        critic_1 = agent.critic_1.apply_gradients(grads=critic_grads)
+        critic_2 = agent.critic_2.apply_gradients(grads=critic_grads)
         if update_targets:
             target_critic_1_params = soft_target_update(critic_1.params,
                                                         agent.target_critic_1.params,
