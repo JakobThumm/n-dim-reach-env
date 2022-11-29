@@ -151,14 +151,14 @@ def train_ac(
         else:
             run = struct
             run.id = int(np.random.rand(1) * 100000)
-        if alg == Algorithm.DroQ:
+        if alg == Algorithm.DroQ or alg == Algorithm.DroQ.value:
             agent = SACLearner.create(
                 seed=seed,
                 observation_space=observation_space,
                 action_space=env.action_space,
                 **agent_kwargs
             )
-        elif alg == Algorithm.TD3:
+        elif alg == Algorithm.TD3 or alg == Algorithm.TD3.value:
             agent = TD3Learner.create(
                 seed=seed,
                 observation_space=observation_space,
@@ -228,14 +228,14 @@ def train_ac(
         else:
             run = struct
             run.id = run_id
-        if alg == Algorithm.DroQ:
+        if alg == Algorithm.DroQ or alg == Algorithm.DroQ.value:
             agent = SACLearner.create(
                 seed=seed,
                 observation_space=observation_space,
                 action_space=env.action_space,
                 **agent_kwargs
             )
-        elif alg == Algorithm.TD3:
+        elif alg == Algorithm.TD3 or alg == Algorithm.TD3.value:
             agent = TD3Learner.create(
                 seed=seed,
                 observation_space=observation_space,

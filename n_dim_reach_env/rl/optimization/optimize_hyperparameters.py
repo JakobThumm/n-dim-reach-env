@@ -108,9 +108,9 @@ def optimize_hyperparameters(
     def objective(trial):
         eval_callback = TrialEvalCallback(trial)
         kwargs = learn_args.copy()
-        if alg == Algorithm.DroQ:
+        if alg == Algorithm.DroQ or alg == Algorithm.DroQ.value:
             agent_kwargs = sample_droq_params(trial, tuning_params)
-        elif alg == Algorithm.TD3:
+        elif alg == Algorithm.TD3 or alg == Algorithm.TD3.value:
             agent_kwargs = sample_td3_params(trial, tuning_params)
         else:
             raise ValueError(f"Unknown algorithm {alg}")
@@ -157,9 +157,9 @@ def optimize_hyperparameters(
         return cost
 
     if use_prior:
-        if alg == Algorithm.DroQ:
+        if alg == Algorithm.DroQ or alg == Algorithm.DroQ.value:
             study.enqueue_trial(prior_droq_params(tuning_params))
-        elif alg == Algorithm.TD3:
+        elif alg == Algorithm.TD3 or alg == Algorithm.TD3.value:
             study.enqueue_trial(prior_td3_params(tuning_params))
         else:
             raise ValueError(f"Unknown algorithm {alg}")

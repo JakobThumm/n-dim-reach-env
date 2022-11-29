@@ -23,7 +23,7 @@ from hydra.core.config_store import ConfigStore
 
 from n_dim_reach_env.conf.config_saute import SauteTrainingConfig
 
-from n_dim_reach_env.train.train_saute import create_env
+from n_dim_reach_env.train.train_saute_droq import create_env
 from n_dim_reach_env.rl.util.action_scaling import unscale_action
 from n_dim_reach_env.rl.util.dict_conversion import\
     single_obs, goal_dist, goal_lidar, get_observation_space, has_dict_obs
