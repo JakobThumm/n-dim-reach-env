@@ -22,7 +22,7 @@ from n_dim_reach_env.rl.optimization.optimize_hyperparameters import optimize_hy
 # from n_dim_reach_env.wrappers.speed_action_wrapper import SpeedActionWrapper
 from n_dim_reach_env.conf.config_saute import SauteTrainingConfig, EnvConfig
 
-from n_dim_reach_env.rl.train_droq import train_droq
+from n_dim_reach_env.rl.train_ac import train_ac
 from n_dim_reach_env.rl.wrappers.saute_wrapper import SauteWrapper
 
 cs = ConfigStore.instance()
@@ -94,9 +94,10 @@ def main(cfg: SauteTrainingConfig):
     if not cfg.optimize.optimize:
         env = create_env(cfg.env)
         eval_env = create_env(cfg.env)
-        train_droq(
+        train_ac(
             env=env,
             eval_env=eval_env,
+            alg="droq",
             **learn_args
         )
     else:
@@ -108,6 +109,7 @@ def main(cfg: SauteTrainingConfig):
         optimize_hyperparameters(
             env_fn=create_env,
             env_args=env_args,
+            alg="droq",
             learn_args=learn_args,
             tuning_params=cfg.optimize.tuning_params,
             n_trials=cfg.optimize.n_trials,

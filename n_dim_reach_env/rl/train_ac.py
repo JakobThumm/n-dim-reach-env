@@ -6,7 +6,7 @@ Date: 14.10.2022
 import os
 import pickle
 import shutil
-from typing import Optional, Dict
+from typing import Optional, Dict, Union
 import tqdm
 import gym  # noqa: F401
 import struct
@@ -18,6 +18,7 @@ import tensorflow as tf  # noqa: F401
 
 from flax.training import checkpoints
 
+from enum import Enum
 from gym import spaces
 
 from n_dim_reach_env.rl.util.action_scaling import scale_action, unscale_action
@@ -25,16 +26,24 @@ from n_dim_reach_env.rl.util.logging import Logger
 from n_dim_reach_env.rl.util.dict_conversion import\
     single_obs, goal_dist, goal_lidar, get_observation_space, has_dict_obs
 
-from n_dim_reach_env.rl.agents import SACLearner
+from n_dim_reach_env.rl.agents import SACLearner, TD3Learner
 from n_dim_reach_env.rl.data import ReplayBuffer
 from n_dim_reach_env.rl.data.her_replay_buffer import HEReplayBuffer
 from n_dim_reach_env.rl.data.single_demo_booster import SingleDemoBooster
 from n_dim_reach_env.rl.evaluation import evaluate  # noqa: F401
 
 
-def train_droq(
+class Algorithm(Enum):
+    """The algorithm to use."""
+
+    DroQ = "droq"
+    TD3 = "td3"
+
+
+def train_ac(
     env: gym.Env,
     eval_env: gym.Env,
+    alg: Union[Algorithm, str] = Algorithm.DroQ,
     seed: int = 0,
     agent_kwargs: dict = {},
     max_ep_len: int = 1000,
@@ -72,6 +81,7 @@ def train_droq(
     Args:
         env (gym.Env): The environment to train on.
         eval_env (gym.Env): The environment to evaluate on.
+        alg (Algorithm, str): The algorithm to use. Can be either "droq" or "td3".
         seed (int, optional): The seed to use for the environment and the agent. Defaults to 0.
         agent_kwargs (dict, optional): Additional keyword arguments to pass to the agent. Defaults to {}.
         max_ep_len (int, optional): The maximum episode length. Defaults to 1000.
@@ -141,12 +151,22 @@ def train_droq(
         else:
             run = struct
             run.id = int(np.random.rand(1) * 100000)
-        agent = SACLearner.create(
-            seed=seed,
-            observation_space=observation_space,
-            action_space=env.action_space,
-            **agent_kwargs
-        )
+        if alg == Algorithm.DroQ:
+            agent = SACLearner.create(
+                seed=seed,
+                observation_space=observation_space,
+                action_space=env.action_space,
+                **agent_kwargs
+            )
+        elif alg == Algorithm.TD3:
+            agent = TD3Learner.create(
+                seed=seed,
+                observation_space=observation_space,
+                action_space=env.action_space,
+                **agent_kwargs
+            )
+        else:
+            raise ValueError(f"Unknown algorithm {alg}")
 
         chkpt_dir = 'saved/checkpoints/' + str(run.id)
         os.makedirs(chkpt_dir, exist_ok=True)
@@ -208,12 +228,22 @@ def train_droq(
         else:
             run = struct
             run.id = run_id
-        agent = SACLearner.create(
-            seed=seed,
-            observation_space=observation_space,
-            action_space=env.action_space,
-            **agent_kwargs
-        )
+        if alg == Algorithm.DroQ:
+            agent = SACLearner.create(
+                seed=seed,
+                observation_space=observation_space,
+                action_space=env.action_space,
+                **agent_kwargs
+            )
+        elif alg == Algorithm.TD3:
+            agent = TD3Learner.create(
+                seed=seed,
+                observation_space=observation_space,
+                action_space=env.action_space,
+                **agent_kwargs
+            )
+        else:
+            raise ValueError(f"Unknown algorithm {alg}")
         if load_checkpoint == -1:
             last_checkpoint = checkpoints.latest_checkpoint(chkpt_dir)
         else:

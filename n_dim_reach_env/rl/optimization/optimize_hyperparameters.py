@@ -3,7 +3,7 @@
 Author: Jakob Thumm
 Date: 14.10.2022
 """
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Union
 import optuna
 import os
 import joblib
@@ -12,7 +12,7 @@ from optuna.pruners import ThresholdPruner, SuccessiveHalvingPruner, MedianPrune
 from optuna.samplers import RandomSampler, TPESampler
 from optuna.integration.skopt import SkoptSampler
 
-from n_dim_reach_env.rl.train_droq import train_droq
+from n_dim_reach_env.rl.train_ac import train_ac, Algorithm
 from n_dim_reach_env.rl.callbacks.trial_eval_callback import TrialEvalCallback
 
 from n_dim_reach_env.conf.config_droq import EnvConfig
@@ -21,6 +21,7 @@ from n_dim_reach_env.conf.config_droq import EnvConfig
 def optimize_hyperparameters(
     env_fn: callable,
     env_args: EnvConfig,
+    alg: Union[Algorithm, str],
     learn_args: Dict[str, Any],
     tuning_params: List[str],
     n_trials: int = 10,
@@ -41,6 +42,7 @@ def optimize_hyperparameters(
 
     :param env_fn: (func) function that is used to instantiate the env
     :param env_args: (EnvConfig) Arguments for env function
+    :param alg: (Algorithm, str) Algorithm to use. Can be either "droq" or "td3".
     :param learn_args: (dict) Arguments for training fn
     :param tuning_params: (list) List of hyperparams to tune
     :param n_trials: (int) maximum number of trials for finding the best hyperparams
@@ -106,7 +108,12 @@ def optimize_hyperparameters(
     def objective(trial):
         eval_callback = TrialEvalCallback(trial)
         kwargs = learn_args.copy()
-        agent_kwargs = sample_droq_params(trial, tuning_params)
+        if alg == Algorithm.DroQ:
+            agent_kwargs = sample_droq_params(trial, tuning_params)
+        elif alg == Algorithm.TD3:
+            agent_kwargs = sample_td3_params(trial, tuning_params)
+        else:
+            raise ValueError(f"Unknown algorithm {alg}")
         if "utd_ratio" in agent_kwargs:
             kwargs["utd_ratio"] = agent_kwargs["utd_ratio"]
             agent_kwargs.pop("utd_ratio")
@@ -123,9 +130,10 @@ def optimize_hyperparameters(
         eval_env = env_fn(env_args)
         # Account for parallel envs
         try:
-            train_droq(
+            train_ac(
                 env=env,
                 eval_env=eval_env,
+                alg=alg,
                 **kwargs
             )
             # Free memory
@@ -149,7 +157,12 @@ def optimize_hyperparameters(
         return cost
 
     if use_prior:
-        study.enqueue_trial(prior_droq_params(tuning_params))
+        if alg == Algorithm.DroQ:
+            study.enqueue_trial(prior_droq_params(tuning_params))
+        elif alg == Algorithm.TD3:
+            study.enqueue_trial(prior_td3_params(tuning_params))
+        else:
+            raise ValueError(f"Unknown algorithm {alg}")
     try:
         study.optimize(objective, n_trials=n_trials, n_jobs=n_jobs)
     except KeyboardInterrupt:
@@ -204,7 +217,7 @@ def sample_droq_params(
         tau = trial.suggest_categorical('tau', [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.2])
         hyperparams['tau'] = tau
     if 'num_qs' in tuning_params:
-        num_qs = trial.suggest_categorical('num_qs', [1, 2, 3]) 
+        num_qs = trial.suggest_categorical('num_qs', [1, 2, 3])
         hyperparams['num_qs'] = num_qs
     # num_min_qs: null
     if 'critic_dropout_rate' in tuning_params:
@@ -229,6 +242,65 @@ def sample_droq_params(
     # goal_selection_strategy: future
     # handle_timeout_termination: true
     # start_steps: 2000
+    if 'batch_size' in tuning_params:
+        batch_size = trial.suggest_categorical('batch_size', [32, 64, 128, 256, 512])
+        hyperparams['batch_size'] = batch_size
+    if 'utd_ratio' in tuning_params:
+        utd_ratio = trial.suggest_categorical('utd_ratio', [1, 2, 5, 10, 20, 40])
+        hyperparams['utd_ratio'] = utd_ratio
+    return hyperparams
+
+
+def sample_td3_params(
+    trial: optuna.trial.Trial,
+    tuning_params: List[str],
+) -> Dict[str, Any]:
+    """
+    Sampler for TD3 hyperparams.
+
+    Args:
+        trial: Optuna trial
+        tuning_params: List of hyperparams to tune
+    Returns:
+        Dict of sampled hyperparams
+    """
+    hyperparams = dict()
+    if 'actor_lr' in tuning_params:
+        actor_lr = trial.suggest_float('actor_lr', 1e-6, 0.01)
+        hyperparams['actor_lr'] = actor_lr
+    if 'critic_lr' in tuning_params:
+        critic_lr = trial.suggest_float('critic_lr', 1e-6, 0.01)
+        hyperparams['critic_lr'] = critic_lr
+    if 'feature_extractor_lr' in tuning_params:
+        feature_extractor_lr = trial.suggest_float('feature_extractor_lr', 1e-6, 0.01)
+        hyperparams['feature_extractor_lr'] = feature_extractor_lr
+    if 'temp_lr' in tuning_params:
+        temp_lr = trial.suggest_float('temp_lr', 1e-6, 0.01)
+        hyperparams['temp_lr'] = temp_lr
+    if 'feature_extractor_dims' in tuning_params:
+        feat_net_width = trial.suggest_categorical('feature_extractor_width', [64, 128, 256])
+        feat_net_depth = trial.suggest_categorical('feature_extractor_depth', [1, 2])
+        hyperparams['feature_extractor_dims'] = [feat_net_width] * feat_net_depth
+    if 'network_dims' in tuning_params:
+        net_width = trial.suggest_categorical('network_width', [64, 128, 256])
+        net_depth = trial.suggest_categorical('network_depth', [1, 2])
+        hyperparams['network_dims'] = [net_width] * net_depth
+    if 'discount' in tuning_params:
+        discount = trial.suggest_categorical('discount', [0.95, 0.97, 0.98, 0.99, 0.995, 0.999])
+        hyperparams['discount'] = discount
+    if 'tau' in tuning_params:
+        tau = trial.suggest_categorical('tau', [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.2])
+        hyperparams['tau'] = tau
+    if 'target_entropy' in tuning_params:
+        target_entropy = trial.suggest_categorical('target_entropy',
+                                                   [-0.1, -0.5, -1, -2, -3, -4, -5, -6, -7, -8, -9, -10])
+        hyperparams['target_entropy'] = target_entropy
+    if 'init_temperature' in tuning_params:
+        init_temperature = trial.suggest_float('init_temperature', 1e-4, 0.5)
+        hyperparams['init_temperature'] = init_temperature
+    if 'sampled_backup' in tuning_params:
+        sampled_backup = trial.suggest_categorical('sampled_backup', [True, False])
+        hyperparams['sampled_backup'] = sampled_backup
     if 'batch_size' in tuning_params:
         batch_size = trial.suggest_categorical('batch_size', [32, 64, 128, 256, 512])
         hyperparams['batch_size'] = batch_size
@@ -266,6 +338,36 @@ def prior_droq_params(tuning_params: List[str]) -> Dict[str, Any]:
         "start_steps": 2000,
         "batch_size": 128,
         "utd_ratio": 10,
+    }
+
+
+def prior_td3_params(tuning_params: List[str]) -> Dict[str, Any]:
+    """
+    Prior knowledge for TD3 hyperparams.
+
+    :param tuning_params: List of hyperparams to tune
+
+    :return: (dict)
+    """
+    return {
+        "actor_lr": 3e-4,
+        "critic_lr": 1e-4,
+        "feature_extractor_lr": 3e-4,
+        "temp_lr": 3e-4,
+        "feature_extractor_dims": [256, 256],
+        "network_dims": [64, 64],
+        "discount": 0.99,
+        "tau": 0.0005,
+        "target_entropy": -1,
+        "init_temperature": 1,
+        "sampled_backup": True,
+        "buffer_size": 1000000,
+        "n_her_samples": 4,
+        "goal_selection_strategy": "future",
+        "handle_timeout_termination": True,
+        "start_steps": 2000,
+        "batch_size": 128,
+        "utd_ratio": 5,
     }
 
 
