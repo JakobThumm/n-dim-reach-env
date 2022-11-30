@@ -11,6 +11,7 @@ import tqdm
 import gym  # noqa: F401
 import struct
 import numpy as np
+from functools import partial
 import wandb
 
 import jax  # noqa: F401
@@ -24,8 +25,8 @@ from gym import spaces
 from n_dim_reach_env.rl.util.action_scaling import scale_action, unscale_action
 from n_dim_reach_env.rl.util.logging import Logger
 from n_dim_reach_env.rl.util.dict_conversion import\
-    single_obs, goal_dist, goal_lidar, get_observation_space, has_dict_obs
-
+    single_obs, goal_dist, goal_lidar, saute_obs, get_observation_space, has_dict_obs
+from n_dim_reach_env.rl.util.normalize_observation import normalize_observation, normalize_batch
 from n_dim_reach_env.rl.agents import SACLearner, TD3Learner
 from n_dim_reach_env.rl.data import ReplayBuffer
 from n_dim_reach_env.rl.data.her_replay_buffer import HEReplayBuffer
@@ -122,16 +123,23 @@ def train_ac(
     """
     os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".80"
     print(jax.devices())
-
+    observation_list = []
+    dict_to_obs_fn = None
+    if hasattr(env, 'saute'):
+        dict_to_obs_fn = partial(saute_obs, obs_fn=dict_to_obs_fn)
+        observation_list.append("saute")
     if hasattr(env, 'observe_goal_lidar') and env.observe_goal_lidar:
-        dict_to_obs_fn = goal_lidar
-        observation_space = get_observation_space(env, "lidar")
-    elif hasattr(env, 'observe_goal_dist') and env.observe_goal_dist:
-        dict_to_obs_fn = goal_dist
-        observation_space = get_observation_space(env, "dist")
-    else:
-        dict_to_obs_fn = single_obs
-        observation_space = get_observation_space(env)
+        dict_to_obs_fn = partial(goal_lidar, obs_fn=dict_to_obs_fn)
+        observation_list.append("lidar")
+    if hasattr(env, 'observe_goal_dist') and env.observe_goal_dist:
+        dict_to_obs_fn = partial(goal_dist, obs_fn=dict_to_obs_fn)
+        observation_list.append("dist")
+    if len(observation_list) == 0:
+        dict_to_obs_fn = partial(single_obs, obs_fn=dict_to_obs_fn)
+        observation_list.append("default")
+    # We need to reverse the ordering here!
+    observation_list.reverse()
+    observation_space = get_observation_space(env, observation_list)
     dict_obs = has_dict_obs(env)
 
     if pre_play_steps > 0 and not boost_single_demo:
@@ -279,6 +287,7 @@ def train_ac(
                 action_observation = dict_to_obs_fn(observation)
             else:
                 action_observation = observation
+            action_observation = normalize_observation(action_observation, observation_space)
             action, agent = agent.sample_actions(action_observation)
             # Agent outputs action in [-1, 1] but we want to step in [low, high]
             action = unscale_action(action,
@@ -346,6 +355,7 @@ def train_ac(
                 batch = replay_buffer.sample(
                     batch_size*utd_ratio
                 )
+            batch = normalize_batch(batch, observation_space)
             agent, update_info = agent.update(batch, utd_ratio)
             if use_wandb and i % train_logging_interval == 0:
                 for k, v in update_info.items():
@@ -359,22 +369,29 @@ def train_ac(
             print(logging_info)
             logger.reset()
             if eval_at_next_done:
+                cost_queue = []
                 for _ in range(eval_episodes):
                     observation, done = eval_env.reset(), False
+                    cost_sum = 0
                     while not done:
                         if dict_obs:
                             action_observation = dict_to_obs_fn(observation)
                         else:
                             action_observation = observation
+                        action_observation = normalize_observation(action_observation, observation_space)
                         action = agent.eval_actions(action_observation)
                         action = unscale_action(action,
                                                 eval_env.action_space.low,
                                                 eval_env.action_space.high,
                                                 squash_output)
-                        observation, _, done, _ = eval_env.step(action)
+                        observation, _, done, infos = eval_env.step(action)
+                        if "cost" in infos:
+                            cost_sum += infos["cost"]
+                    cost_queue.append(cost_sum)
                 eval_info = {
                     'return': np.mean(eval_env.return_queue),
-                    'length': np.mean(eval_env.length_queue)
+                    'length': np.mean(eval_env.length_queue),
+                    'cum_ep_cost': np.mean(cost_queue)
                 }
                 print("Eval info:", eval_info)
                 success = True

@@ -5,30 +5,36 @@ Date: 4.11.2022
 """
 
 import numpy as np
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 import gym
 from gym import spaces
 from copy import copy
 
 
 def single_obs(
-    obs_dict: Dict
+    obs_dict: Dict,
+    obs_fn: Optional[callable] = None
 ) -> np.ndarray:
     """Convert an observation dictionary to a concatenated vector.
 
     Args:
-        obs_dict: {'observation', 'achieved_goal', 'desired_goal'} dictionary
-
+        obs_dict (Dict): {'observation', 'achieved_goal', 'desired_goal'} dictionary
+        obs_fn (Optional, Callable): Optional additional function to convert the observation.
     Returns:
         vec [observation, desired_goal]
     """
-    return np.concatenate((
-        obs_dict["observation"],
-        obs_dict["desired_goal"]),  axis=-1)
+    observation = np.concatenate((obs_dict["observation"], obs_dict["desired_goal"]), axis=-1)
+    if obs_fn is not None:
+        obs_dict = copy(obs_dict)
+        obs_dict["observation"] = observation
+        return obs_fn(obs_dict)
+    else:
+        return observation
 
 
 def goal_dist(
-    obs_dict: Dict
+    obs_dict: Dict,
+    obs_fn: Optional[callable] = None
 ) -> np.ndarray:
     """Convert an observation dictionary to a concatenated vector.
 
@@ -36,13 +42,19 @@ def goal_dist(
 
     Args:
         obs_dict: {'observation', 'achieved_goal', 'desired_goal'} dictionary
-
+        obs_fn (Optional, Callable): Optional additional function to convert the observation.
     Returns:
         vec [observation, goal_dist]
     """
-    return np.concatenate((
+    observation = np.concatenate((
         obs_dict["observation"],
         np.linalg.norm(obs_dict["achieved_goal"] - obs_dict["desired_goal"], axis=-1)),  axis=-1)
+    if obs_fn is not None:
+        obs_dict = copy(obs_dict)
+        obs_dict["observation"] = observation
+        return obs_fn(obs_dict)
+    else:
+        return observation
 
 
 def goal_lidar(
@@ -50,7 +62,8 @@ def goal_lidar(
     lidar_num_bins: int = 16,
     lidar_max_dist: Optional[float] = 3,
     lidar_exp_gain: Optional[float] = None,
-    lidar_alias: bool = True
+    lidar_alias: bool = True,
+    obs_fn: Optional[callable] = None
 ) -> np.ndarray:
     """Convert an observation dictionary to a concatenated vector.
 
@@ -63,7 +76,7 @@ def goal_lidar(
         lidar_max_dist (float): Maximum distance for the lidar.
         lidar_exp_gain (float): Exponential gain for the lidar (only used if lidar_max_dist is None).
         lidar_alias (bool): Whether to use the lidar aliasing.
-
+        obs_fn (Optional, Callable): Optional additional function to convert the observation.
     Returns:
         vec [observation, goal_lidar]
     """
@@ -114,7 +127,8 @@ def goal_lidar(
     if lidar_alias:
         alias = (angle - bin_angle) / bin_size
         eps = 1e-5
-        assert np.all(-eps <= alias) and np.all(alias <= 1+eps), f'bad alias {alias}, dist {dist}, angle {angle}, bin {bin}'
+        assert np.all(-eps <= alias) and np.all(alias <= 1+eps),\
+            f'bad alias {alias}, dist {dist}, angle {angle}, bin {bin}'
         alias = np.clip(alias, 0, 1)
         bin_plus = (bin + 1) % lidar_num_bins
         bin_minus = (bin - 1) % lidar_num_bins
@@ -125,19 +139,52 @@ def goal_lidar(
             lidar_obs[np.arange(bin.shape[0]).astype(np.intp), bin_plus.astype(np.intp)] = alias * sensor
             lidar_obs[np.arange(bin.shape[0]).astype(np.intp), bin_minus.astype(np.intp)] = (1 - alias) * sensor
 
-    return np.concatenate((obs_dict["observation"], lidar_obs),  axis=-1)
+    observation = np.concatenate((obs_dict["observation"], lidar_obs),  axis=-1)
+    if obs_fn is not None:
+        obs_dict = copy(obs_dict)
+        obs_dict["observation"] = observation
+        return obs_fn(obs_dict)
+    else:
+        return observation
+
+
+def saute_obs(
+    obs_dict: Dict,
+    obs_fn: Optional[callable] = None
+) -> np.ndarray:
+    """Add the max cost of the saute wrapper to the observation.
+
+    ma_cost is assumed to be in the last position of the desired_goal observation.
+
+    Args:
+        obs_dict: {'observation', 'achieved_goal', 'desired_goal'} dictionary
+        obs_fn (Optional, Callable): Optional additional function to convert the observation.
+    Returns:
+        vec [observation, max_cost]
+    """
+    observation = np.concatenate(
+        (obs_dict["observation"], (obs_dict["desired_goal"][..., -1])[..., np.newaxis]),
+        axis=-1
+    )
+    if obs_fn is not None:
+        obs_dict = copy(obs_dict)
+        obs_dict["observation"] = observation
+        return obs_fn(obs_dict)
+    else:
+        return observation
 
 
 def get_observation_space(
     env: gym.Env,
-    goal_observation_type: str = "default",
+    goal_observation_type: List[str] = ["default"],
     lidar_num_bins: int = 16
 ) -> spaces.Box:
     """Get the observation space.
 
     Args:
         env (gym.Env): Environment.
-        goal_observation_type (str): Type of goal observation. Can be 'default', 'lidar', or 'dist'.
+        goal_observation_type (List[str]): Type of goal observation.
+            Can be 'default', 'lidar', 'dist', or 'saute'. Order is important.
         lidar_num_bins (int): Number of bins for the lidar.
 
     Returns:
@@ -149,17 +196,22 @@ def get_observation_space(
         observation_space = copy(env.observation_space)
         lows = np.array(env.observation_space.spaces["observation"].low)
         highs = np.array(env.observation_space.spaces["observation"].high)
-        if goal_observation_type == "default":
-            lows = np.append(lows, env.observation_space.spaces["desired_goal"].low)
-            highs = np.append(highs, env.observation_space.spaces["desired_goal"].high)
-        elif goal_observation_type == "lidar":
-            lows = np.append(lows, np.full(lidar_num_bins, 0))
-            highs = np.append(highs, np.full(lidar_num_bins, 1))
-        elif goal_observation_type == "dist":
-            lows = np.append(lows, np.full(1, 0))
-            highs = np.append(highs, np.full(1, 1))
-        else:
-            raise ValueError(f"Unknown goal_observation_type {goal_observation_type}")
+        for type in goal_observation_type:
+            if type == "default":
+                lows = np.append(lows, env.observation_space.spaces["desired_goal"].low)
+                highs = np.append(highs, env.observation_space.spaces["desired_goal"].high)
+            elif type == "lidar":
+                lows = np.append(lows, np.full(lidar_num_bins, 0))
+                highs = np.append(highs, np.full(lidar_num_bins, 1))
+            elif type == "dist":
+                lows = np.append(lows, np.full(1, 0))
+                highs = np.append(highs, np.full(1, 1))
+            elif type == "saute":
+                lows = np.append(lows, np.full(1, 0))
+                highs = np.append(highs, np.full(1, env.obs_limit_cost))
+                print("Just for debug")
+            else:
+                raise ValueError(f"Unknown goal_observation_type {goal_observation_type}")
         observation_space = spaces.Box(low=lows, high=highs)
     else:
         observation_space = env.observation_space

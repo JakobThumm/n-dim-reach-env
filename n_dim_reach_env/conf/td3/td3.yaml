@@ -8,7 +8,7 @@ discount: 0.98
 tau: 5e-3
 target_entropy: -1
 init_temperature: 0.1
-sampled_backup: true
+sampled_backup: false
 buffer_size: 1000000
 use_her: true
 n_her_samples: 4

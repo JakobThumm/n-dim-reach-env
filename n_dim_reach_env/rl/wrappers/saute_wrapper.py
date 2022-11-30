@@ -25,8 +25,9 @@ class SauteWrapper(gym.Wrapper):
             episode_length (int): Length of an episode.
         """
         super().__init__(env)
+        self.saute = True
         self.cost_threshold = cost_threshold
-        obs_limit_cost = episode_length
+        self.obs_limit_cost = episode_length
         self.cumulative_cost = 0.0
         self.max_costs = 0.0
         self.max_cost_per_step = cost_threshold/episode_length
@@ -37,27 +38,27 @@ class SauteWrapper(gym.Wrapper):
             # Extend the observation space by one dimension (cumm cost)
             obs_space = self._observation_space.spaces["observation"]
             self._observation_space.spaces["observation"] = gym.spaces.Box(
-                low=np.append(obs_space.low, [0.0, 0.0]),
-                high=np.append(obs_space.high, [obs_limit_cost, obs_limit_cost]),
+                low=np.append(obs_space.low, 0.0),
+                high=np.append(obs_space.high, self.obs_limit_cost),
                 dtype=obs_space.dtype)
             # Extend the achieved goal space by one dimension (cumm cost)
             obs_space = self._observation_space.spaces["achieved_goal"]
             self._observation_space.spaces["achieved_goal"] = gym.spaces.Box(
-                low=np.append(obs_space.low, 0),
-                high=np.append(obs_space.high, obs_limit_cost),
+                low=np.append(obs_space.low, [0.0, 0.0]),
+                high=np.append(obs_space.high, [self.obs_limit_cost, self.obs_limit_cost]),
                 dtype=obs_space.dtype)
             # Extend the desired goal space by one dimension (cumm cost)
             obs_space = self._observation_space.spaces["desired_goal"]
             self._observation_space.spaces["desired_goal"] = gym.spaces.Box(
-                low=np.append(obs_space.low, 0),
-                high=np.append(obs_space.high, obs_limit_cost),
+                low=np.append(obs_space.low, [0.0, 0.0]),
+                high=np.append(obs_space.high, [self.obs_limit_cost, self.obs_limit_cost]),
                 dtype=obs_space.dtype)
             self.dict_space = True
         elif isinstance(self.env.observation_space, gym.spaces.Box):
             obs_space = self.env.observation_space
             self._observation_space = gym.spaces.Box(
-                low=np.append(obs_space.low, [0, 0]),
-                high=np.append(obs_space.high, [obs_limit_cost, obs_limit_cost]),
+                low=np.append(obs_space.low, [0.0, 0.0]),
+                high=np.append(obs_space.high, [self.obs_limit_cost, self.obs_limit_cost]),
                 dtype=obs_space.dtype)
             self.dict_space = False
         else:
@@ -97,7 +98,8 @@ class SauteWrapper(gym.Wrapper):
         Returns:
             Union[List[float], float]: Adapted reward.
         """
-        return (cum_cost <= max_cost) * reward + (cum_cost > max_cost) * self.min_step_reward
+        reward = (cum_cost <= max_cost) * reward + (cum_cost > max_cost) * self.min_step_reward
+        return reward
 
     def compute_reward(
         self,
@@ -125,17 +127,23 @@ class SauteWrapper(gym.Wrapper):
                 assert reward == env.compute_reward(
                     ob['achieved_goal'], ob['goal'], info)
         """
-        reward = self.env.compute_reward(achieved_goal[..., :-1], desired_goal[..., :-1], info)
-        cumulative_cost = achieved_goal[..., -1]
+        reward = self.env.compute_reward(achieved_goal[..., :-2], desired_goal[..., :-2], info)
+        cumulative_cost = achieved_goal[..., -2]
         max_cost = desired_goal[..., -1]
         return self.reward(reward, cumulative_cost, max_cost)
 
     def observation(self, observation):
-        """Add the cost to the observation."""
+        """Add the cost to the observation.
+
+        For HER, we need to add both the cumulative cost and the maximum cost to the goal.
+        Otherwise, we could not compute the reward properly.
+        """
         if self.dict_space:
-            observation["observation"] = np.append(observation["observation"], [self.cumulative_cost, self.max_costs])
-            observation["achieved_goal"] = np.append(observation["achieved_goal"], self.cumulative_cost)
-            observation["desired_goal"] = np.append(observation["desired_goal"], self.max_costs)
+            observation["observation"] = np.append(observation["observation"], [self.cumulative_cost])
+            observation["achieved_goal"] = np.append(observation["achieved_goal"],
+                                                     [self.cumulative_cost, self.max_costs])
+            observation["desired_goal"] = np.append(observation["desired_goal"],
+                                                    [self.cumulative_cost, self.max_costs])
         else:
             observation = np.append(observation, [self.cumulative_cost, self.max_costs])
         return observation
