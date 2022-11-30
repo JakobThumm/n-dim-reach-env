@@ -3,6 +3,7 @@ from gym.wrappers.flatten_observation import FlattenObservation
 
 from n_dim_reach_env.rl.wrappers.single_precision import SinglePrecision
 from n_dim_reach_env.rl.wrappers.universal_seed import UniversalSeed
+from n_dim_reach_env.rl.wrappers.saute_wrapper import SauteWrapper
 
 
 def wrap_gym(env: gym.Env, rescale_actions: bool = True) -> gym.Env:

@@ -1,0 +1,50 @@
+Safexp-PointGoalSparse1-v0:
+  env_wrapper:
+    - gym.wrappers.TimeLimit:
+        max_episode_steps: 1000
+    - n_dim_reach_env.rl.wrappers.SauteWrapper:
+        cost_threshold: 25
+        min_step_reward: -1.0
+        episode_length: 1000
+    - stable_baselines3.common.monitor.Monitor
+  # callback:
+  #   - n_dim_reach_env.callbacks.TensorboardCallback:
+  #       additional_log_info_keys: ['n_goal_reached', 'n_collision', 'action_resamples']
+  #vec_env_wrapper: 
+  #  - stable_baselines3.common.vec_env.VecMonitor:
+  #      info_keywords: ['n_goal_reached', 'n_collision']
+  #callback: stable_baselines3.common.callbacks.CheckpointCallback
+  n_envs: 1
+  n_timesteps: 1000000
+  policy: 'MultiInputPolicy'
+  gamma: 0.98
+  buffer_size: 200000
+  learning_starts: 10000
+  noise_type: 'normal'
+  noise_std: 0.1
+  gradient_steps: -1
+  train_freq: [1, "episode"]
+  learning_rate: !!float 1e-3
+  policy_kwargs: "dict(net_arch=[400, 300])"
+  replay_buffer_class: HerReplayBuffer
+  # Parameters for HER
+  replay_buffer_kwargs: "dict(n_sampled_goal=4,goal_selection_strategy='future',online_sampling=True,max_episode_length=1000)"
+
+BipedalWalkerHardcore-v3:
+  env_wrapper:
+    - gym.wrappers.TimeLimit:
+        max_episode_steps: 1000
+    - n_dim_reach_env.wrappers.PrintingWrapper
+    - stable_baselines3.common.monitor.Monitor
+  n_timesteps: !!float 1e7
+  policy: 'MlpPolicy'
+  learning_rate: lin_7.3e-4
+  buffer_size: 1000000
+  batch_size: 256
+  ent_coef: 0.005
+  gamma: 0.99
+  tau: 0.01
+  train_freq: 1
+  gradient_steps: 1
+  learning_starts: 10000
+  policy_kwargs: "dict(net_arch=[256, 256])"

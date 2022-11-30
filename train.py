@@ -1,5 +1,6 @@
 from rl_zoo3.train import train
 import n_dim_reach_env  # noqa: F401
+import safety_gym  # noqa: F401
 from stable_baselines3.her.her_replay_buffer import HerReplayBuffer
 from n_dim_reach_env.wrappers.HER_buffer_add_monkey_patch import (
     custom_add,
