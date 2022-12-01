@@ -15,9 +15,8 @@ from flax import struct
 from flax.training.train_state import TrainState
 
 from n_dim_reach_env.rl.agents.agent import Agent
-from n_dim_reach_env.rl.networks.temperature import Temperature
 from n_dim_reach_env.rl.data.dataset import DatasetDict
-from n_dim_reach_env.rl.distributions import TanhNormal
+from n_dim_reach_env.rl.distributions import TanhNormalFixed
 from n_dim_reach_env.rl.networks import MLP, StateActionValue
 from n_dim_reach_env.rl.networks.common import soft_target_update
 
@@ -34,13 +33,12 @@ class TD3Learner(Agent):
     Args:
         critic_1: The first critic network.
         critic_2: The second critic network.
+        actor: The actor network.
         target_critic_1: The first target critic network.
         target_critic_2: The second target critic network.
-        temp: The temperature network.
         tau: The soft target update coefficient.
         discount: The discount factor.
-        target_entropy: The target entropy.
-        sampled_backup: Whether to use sampled backups.
+        use_feature_extractor: Whether or not a feature extractor is in place.
     """
 
     feature_extractor: TrainState
@@ -49,11 +47,8 @@ class TD3Learner(Agent):
     critic_2: TrainState
     target_critic_1: TrainState
     target_critic_2: TrainState
-    temp: TrainState
     tau: float
     discount: float
-    target_entropy: float
-    sampled_backup: bool = struct.field(pytree_node=False)
     use_feature_extractor: bool = struct.field(pytree_node=False)
 
     @classmethod
@@ -64,14 +59,12 @@ class TD3Learner(Agent):
                actor_lr: float = 3e-4,
                critic_lr: float = 3e-4,
                feature_extractor_lr: float = 3e-4,
-               temp_lr: float = 3e-4,
                feature_extractor_dims: Optional[Sequence[int]] = None,
                network_dims: Sequence[int] = (64, 64),
                discount: float = 0.99,
                tau: float = 0.005,
-               target_entropy: Optional[float] = None,
-               init_temperature: float = 1.0,
-               sampled_backup: bool = True):
+               action_noise_std: float = 0.1,
+               action_noise_clip: float = None):
         r"""Create the TD3 agent and its optimizers.
 
         Args:
@@ -81,7 +74,6 @@ class TD3Learner(Agent):
             actor_lr (float, optional): The learning rate for the actor. Defaults to 3e-4.
             critic_lr (float, optional): The learning rate for the critic. Defaults to 3e-4.
             feature_extractor_lr (float, optional): The learning rate for the feature extractor. Defaults to 3e-4.
-            temp_lr (float, optional): The learning rate for the temperature. Defaults to 3e-4.
             feature_extractor_dims (Sequence[int], optional): The dimensions of the feature extractor.
                 Defaults to None.
             network_dims (Sequence[int], optional): The dimensions of the policy and critic networks.
@@ -89,15 +81,12 @@ class TD3Learner(Agent):
             discount (float, optional): The discount factor. Defaults to 0.99.
             tau (float, optional): The soft target update coefficient. Defaults to 0.005.
             target_entropy (Optional[float], optional): The target entropy. Defaults to None.
-            init_temperature (float, optional): The initial temperature. Defaults to 1.0.
-            sampled_backup (bool, optional): Whether to use sampled backups. Defaults to True.
+            action_noise_std (float, optional): The standard deviation of the normal action noise distribution.
+            action_noise_clip (float, optional): The action noise clipping. Not implemented yet!
         """
         action_dim = action_space.shape[-1]
         observations = observation_space.sample()
         actions = action_space.sample()
-
-        if target_entropy is None:
-            target_entropy = -action_dim / 2
 
         rng = jax.random.PRNGKey(seed)
         rng, actor_key, feature_extractor_key, critic_1_key, critic_2_key, temp_key = jax.random.split(rng, 6)
@@ -119,7 +108,8 @@ class TD3Learner(Agent):
         actor_base_cls = partial(MLP,
                                  hidden_dims=network_dims,
                                  activate_final=True)
-        actor_def = TanhNormal(actor_base_cls, action_dim)
+        stds = jnp.full(action_dim, action_noise_std)
+        actor_def = TanhNormalFixed(actor_base_cls, action_dim, stds)
         actor_params = actor_def.init(actor_key, features)['params']
         actor = TrainState.create(apply_fn=actor_def.apply,
                                   params=actor_params,
@@ -155,11 +145,7 @@ class TD3Learner(Agent):
                                             tx=optax.GradientTransformation(
                                               lambda _: None, lambda _: None))
         # Temperature
-        temp_def = Temperature(init_temperature)
-        temp_params = temp_def.init(temp_key)['params']
-        temp = TrainState.create(apply_fn=temp_def.apply,
-                                 params=temp_params,
-                                 tx=optax.adam(learning_rate=temp_lr))
+        
         return cls(rng=rng,
                    feature_extractor=feature_extractor,
                    actor=actor,
@@ -167,11 +153,8 @@ class TD3Learner(Agent):
                    critic_2=critic_2,
                    target_critic_1=target_critic_1,
                    target_critic_2=target_critic_2,
-                   temp=temp,
                    tau=tau,
                    discount=discount,
-                   target_entropy=target_entropy,
-                   sampled_backup=sampled_backup,
                    use_feature_extractor=use_feature_extractor)
 
     @staticmethod
@@ -181,7 +164,7 @@ class TD3Learner(Agent):
 
         The actor loss uses the critic 1 value.
 
-        Loss = \alpha * log(\pi(a|s)) - Q_1(s, \pi(a|s))
+        Loss = -Q_1(s, \pi(a|s))
         """
         rng, critic_1_key, dist_key = jax.random.split(agent.rng, 3)
         if agent.use_feature_extractor:
@@ -195,14 +178,12 @@ class TD3Learner(Agent):
                                                             rngs={'dropout': feature_extractor_key})
                 dist = agent.actor.apply_fn({'params': agent.actor.params}, features)
                 actions = dist.sample(seed=dist_key)
-                log_probs = dist.log_prob(actions)
-                alpha = agent.temp.apply_fn({'params': agent.temp.params})
                 q_1 = agent.critic_1.apply_fn({'params': agent.critic_1.params},
                                               features,
                                               actions,
                                               True,
                                               rngs={'dropout': critic_1_key})
-                feat_loss = (alpha * log_probs - q_1).mean()
+                feat_loss = (-q_1).mean()
                 return feat_loss
             feature_grads = jax.grad(feature_extractor_loss_fn)(agent.feature_extractor.params)
             feature_extractor = agent.feature_extractor.apply_gradients(grads=feature_grads)
@@ -220,17 +201,14 @@ class TD3Learner(Agent):
             """Actor loss."""
             dist = agent.actor.apply_fn({'params': actor_params}, features)
             actions = dist.sample(seed=dist_key)
-            log_probs = dist.log_prob(actions)
-            alpha = agent.temp.apply_fn({'params': agent.temp.params})
             q_1 = agent.critic_1.apply_fn({'params': agent.critic_1.params},
                                           features,
                                           actions,
                                           True,
                                           rngs={'dropout': critic_1_key})
-            actor_loss = (alpha * log_probs - q_1).mean()
+            actor_loss = (- q_1).mean()
             return actor_loss, {
-                'actor_loss': actor_loss,
-                'entropy': -log_probs.mean(),
+                'actor_loss': actor_loss
             }
 
         actor_grads, actor_info = jax.grad(actor_loss_fn, has_aux=True)(agent.actor.params)
@@ -241,29 +219,6 @@ class TD3Learner(Agent):
             rng=rng
         )
         return agent, actor_info
-
-    @staticmethod
-    def update_temperature(agent,
-                           entropy: float) -> Tuple[Agent, Dict[str, float]]:
-        r"""Update the temperature.
-
-        Loss = \alpha * (target_entropy - entropy)
-        """
-        def temperature_loss_fn(temp_params):
-            temperature = agent.temp.apply_fn({'params': temp_params})
-            temp_loss = temperature * (entropy - agent.target_entropy).mean()
-            return temp_loss, {
-                'temperature': temperature,
-                'temperature_loss': temp_loss
-            }
-
-        grads, temp_info = jax.grad(temperature_loss_fn,
-                                    has_aux=True)(agent.temp.params)
-        temp = agent.temp.apply_gradients(grads=grads)
-
-        agent = agent.replace(temp=temp)
-
-        return agent, temp_info
 
     @staticmethod
     def update_critic(
@@ -278,14 +233,9 @@ class TD3Learner(Agent):
 
         y = r + gamma * mask * min_{i=1..2}(Q^{i}_{target}(s', \pi(s')),
             where mask = 1 if not done else 0 and M=N if not specified otherwise.
-        if sampled_backup:
-            y -= gamma * mask * \alpha * log(\pi(a|s'))
         Loss = 0.5 * (Q(s, a) - y)^2
         """
-        if agent.sampled_backup:
-            rng, critic_1_key, critic_2_key, dist_key = jax.random.split(agent.rng, 4)
-        else:
-            rng, critic_1_key, critic_2_key = jax.random.split(agent.rng, 3)
+        rng, critic_1_key, critic_2_key, dist_key = jax.random.split(agent.rng, 4)
         if agent.use_feature_extractor:
             rng, feature_extractor_key, next_feature_extractor_key = jax.random.split(rng, 3)
             features = agent.feature_extractor.apply_fn({'params': agent.feature_extractor.params},
@@ -301,10 +251,8 @@ class TD3Learner(Agent):
             next_features = batch['next_observations']
         next_dist = agent.actor.apply_fn({'params': agent.actor.params},
                                          next_features)
-        if agent.sampled_backup:
-            next_actions = next_dist.sample(seed=dist_key)
-        else:
-            next_actions = next_dist.mode()
+
+        next_actions = next_dist.sample(seed=dist_key)
         next_q_1 = agent.target_critic_1.apply_fn({'params': agent.target_critic_1.params},
                                                   next_features,
                                                   next_actions,
@@ -317,11 +265,6 @@ class TD3Learner(Agent):
                                                   rngs={'dropout': critic_2_key})
         next_q = jnp.min(jnp.stack([next_q_1, next_q_2]), axis=0)
         y = batch['rewards'] + agent.discount * batch['masks'] * next_q
-        if agent.sampled_backup:
-            next_log_probs = next_dist.log_prob(next_actions)
-            alpha = agent.temp.apply_fn({'params': agent.temp.params})
-            target_backup = - agent.discount * batch['masks'] * alpha * next_log_probs
-            y += target_backup
 
         def critic_loss_fn(
             critic_1_params,
@@ -342,7 +285,10 @@ class TD3Learner(Agent):
             return critic_loss, {'critic_loss': critic_loss,
                                  'q_1': q_1.mean(),
                                  'q_2': q_2.mean(),
+                                 'max_q_1': q_1.max(),
+                                 'max_q_2': q_2.max(),
                                  'target_q': y.mean(),
+                                 'max_target_q': y.max(),
                                  'batch_reward': batch['rewards'].mean()}
 
         critic_grads, info = jax.grad(critic_loss_fn, has_aux=True)(
@@ -403,6 +349,5 @@ class TD3Learner(Agent):
 
         if update_actor:
             new_agent, actor_info = self.update_actor(new_agent, mini_batch)
-            new_agent, temp_info = self.update_temperature(new_agent, actor_info['entropy'])
 
         return new_agent, {**actor_info, **critic_info, **temp_info}

@@ -209,7 +209,6 @@ def get_observation_space(
             elif type == "saute":
                 lows = np.append(lows, np.full(1, 0))
                 highs = np.append(highs, np.full(1, env.obs_limit_cost))
-                print("Just for debug")
             else:
                 raise ValueError(f"Unknown goal_observation_type {goal_observation_type}")
         observation_space = spaces.Box(low=lows, high=highs)

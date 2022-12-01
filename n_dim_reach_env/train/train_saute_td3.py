@@ -35,14 +35,12 @@ def main(cfg: TD3TrainingConfig):
         "actor_lr": cfg.td3.actor_lr,
         "critic_lr": cfg.td3.critic_lr,
         "feature_extractor_lr": cfg.td3.feature_extractor_lr,
-        "temp_lr": cfg.td3.temp_lr,
         "feature_extractor_dims": cfg.td3.feature_extractor_dims,
         "network_dims": cfg.td3.network_dims,
         "discount": cfg.td3.discount,
         "tau": cfg.td3.tau,
-        "target_entropy": cfg.td3.target_entropy,
-        "init_temperature": cfg.td3.init_temperature,
-        "sampled_backup": cfg.td3.sampled_backup
+        "action_noise_std": cfg.td3.action_noise_std,
+        "action_noise_clip": cfg.td3.action_noise_clip
     }
     learn_args = {
         "seed": cfg.env.seed,

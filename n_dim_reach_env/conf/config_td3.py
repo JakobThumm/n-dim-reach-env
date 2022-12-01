@@ -10,14 +10,12 @@ class TD3Config:
     actor_lr: float
     critic_lr: float
     feature_extractor_lr: float
-    temp_lr: float
     feature_extractor_dims: List[int]
     network_dims: List[int]
     discount: float
     tau: float
-    target_entropy: float
-    init_temperature: float
-    sampled_backup: bool
+    action_noise_std: float
+    action_noise_clip: float
     buffer_size: int
     use_her: bool
     n_her_samples: int
